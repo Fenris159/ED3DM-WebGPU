@@ -1,0 +1,292 @@
+{
+  "systems": [
+    {
+      "name": "Sol",
+      "coords": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "population": 22780959567,
+      "primary_economy": "Refinery",
+      "allegiance": "Federation",
+      "government": "Democracy"
+    },
+    {
+      "name": "Alpha Centauri",
+      "coords": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "population": 0,
+      "primary_economy": "None",
+      "allegiance": "None",
+      "government": "None"
+    },
+    {
+      "name": "Barnard's Star",
+      "coords": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "population": 0,
+      "primary_economy": "None",
+      "allegiance": "None",
+      "government": "None"
+    },
+    {
+      "name": "SYS 0-3",
+      "coords": {
+        "x": 36.199657601622384,
+        "y": -4.528050033861503,
+        "z": 7.932185482030818
+      },
+      "population": 0,
+      "primary_economy": "None",
+      "allegiance": "None",
+      "government": "None"
+    },
+    {
+      "name": "SYS 0-4",
+      "coords": {
+        "x": 6.656284703243815,
+        "y": 5.561688640400083,
+        "z": 5.301599442647788
+      },
+      "population": 0,
+      "primary_economy": "None",
+      "allegiance": "None",
+      "government": "None"
+    },
+    {
+      "name": "SYS 0-5",
+      "coords": {
+        "x": -4.545426128234108,
+        "y": 1.1207926458249549,
+        "z": 41.924538125081554
+      },
+      "population": 0,
+      "primary_economy": "None",
+      "allegiance": "None",
+      "government": "None"
+    },
+    {
+      "name": "SYS 0-6",
+      "coords": {
+        "x": 30.49385845538257,
+        "y": 1.5014091423164933,
+        "z": -4.998613301276576
+      },
+      "population": 0,
+      "primary_economy": "None",
+      "allegiance": "None",
+      "government": "None"
+    },
+    {
+      "name": "SYS 0-7",
+      "coords": {
+        "x": -35.716314367089176,
+        "y": 1.865585455181113,
+        "z": 17.35548523849162
+      },
+      "population": 0,
+      "primary_economy": "None",
+      "allegiance": "None",
+      "government": "None"
+    },
+    {
+      "name": "SYS 0-8",
+      "coords": {
+        "x": 34.3559085870786,
+        "y": 1.8199264703208573,
+        "z": 0.6791272982029444
+      },
+      "population": 0,
+      "primary_economy": "None",
+      "allegiance": "None",
+      "government": "None"
+    },
+    {
+      "name": "SYS 0-9",
+      "coords": {
+        "x": -31.453768257044608,
+        "y": 1.5171579940409756,
+        "z": 0.03398481049925552
+      },
+      "population": 0,
+      "primary_economy": "None",
+      "allegiance": "None",
+      "government": "None"
+    },
+    {
+      "name": "SYS 0-10",
+      "coords": {
+        "x": -41.42258634742309,
+        "y": -4.133393533945694,
+        "z": -21.86513742487829
+      },
+      "population": 0,
+      "primary_economy": "None",
+      "allegiance": "None",
+      "government": "None"
+    },
+    {
+      "name": "SYS 0-11",
+      "coords": {
+        "x": -1.332781935431719,
+        "y": 8.650440971840558,
+        "z": -16.431976482474592
+      },
+      "population": 0,
+      "primary_economy": "None",
+      "allegiance": "None",
+      "government": "None"
+    },
+    {
+      "name": "SYS 0-12",
+      "coords": {
+        "x": -26.472644996696765,
+        "y": 10.90679090740291,
+        "z": -28.615641365673103
+      },
+      "population": 0,
+      "primary_economy": "None",
+      "allegiance": "None",
+      "government": "None"
+    },
+    {
+      "name": "SYS 0-13",
+      "coords": {
+        "x": 39.69351145441749,
+        "y": -10.638799045636697,
+        "z": 5.012130212613401
+      },
+      "population": 0,
+      "primary_economy": "None",
+      "allegiance": "None",
+      "government": "None"
+    },
+    {
+      "name": "SYS 0-14",
+      "coords": {
+        "x": -41.63679315181806,
+        "y": 9.475688817901935,
+        "z": 22.693407747972767
+      },
+      "population": 0,
+      "primary_economy": "None",
+      "allegiance": "None",
+      "government": "None"
+    },
+    {
+      "name": "SYS 0-15",
+      "coords": {
+        "x": -18.903138532393015,
+        "y": 3.911143478295005,
+        "z": 25.630879067078762
+      },
+      "population": 0,
+      "primary_economy": "None",
+      "allegiance": "None",
+      "government": "None"
+    },
+    {
+      "name": "SYS 0-16",
+      "coords": {
+        "x": 0.5799348430942801,
+        "y": 10.131593785392576,
+        "z": 12.78871096767206
+      },
+      "population": 0,
+      "primary_economy": "None",
+      "allegiance": "None",
+      "government": "None"
+    },
+    {
+      "name": "SYS 0-17",
+      "coords": {
+        "x": -19.75564744023617,
+        "y": -0.6270014620378438,
+        "z": 4.266154029240954
+      },
+      "population": 0,
+      "primary_economy": "None",
+      "allegiance": "None",
+      "government": "None"
+    },
+    {
+      "name": "SYS 0-18",
+      "coords": {
+        "x": -6.7088120926072685,
+        "y": 7.715546304625802,
+        "z": 11.811270374424558
+      },
+      "population": 0,
+      "primary_economy": "None",
+      "allegiance": "None",
+      "government": "None"
+    },
+    {
+      "name": "SYS 0-19",
+      "coords": {
+        "x": 37.62934156893021,
+        "y": 0.0372423136450587,
+        "z": -28.65147191751443
+      },
+      "population": 0,
+      "primary_economy": "None",
+      "allegiance": "None",
+      "government": "None"
+    },
+    {
+      "name": "SYS 0-20",
+      "coords": {
+        "x": 6.906096954867492,
+        "y": 0.2962053280433231,
+        "z": -15.754784400623041
+      },
+      "population": 0,
+      "primary_economy": "None",
+      "allegiance": "None",
+      "government": "None"
+    },
+    {
+      "name": "SYS 0-21",
+      "coords": {
+        "x": -2.705431341133285,
+        "y": -0.00453857376260876,
+        "z": 1.3072372284830311
+      },
+      "population": 0,
+      "primary_economy": "None",
+      "allegiance": "None",
+      "government": "None"
+    },
+    {
+      "name": "SYS 0-22",
+      "coords": {
+        "x": 26.23653354279443,
+        "y": -12.58738045466594,
+        "z": -7.532230022050485
+      },
+      "population": 0,
+      "primary_economy": "None",
+      "allegiance": "None",
+      "government": "None"
+    },
+    {
+      "name": "SYS 0-23",
+      "coords": {
+        "x": -23.632160786559798,
+        "y": -13.715176850103544,
+        "z": 11.353949363263407
+      },
+      "population": 0,
+      "primary_economy": "None",
+      "allegiance": "None",
+      "government": "None"
+    }
+  ]
+}

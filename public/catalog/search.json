@@ -1,5 +1,20 @@
 {
-  "Sol": { "x": 0, "y": 0, "z": 0, "tile": "sol" },
-  "Colonia": { "x": -9530.5, "y": -910.28125, "z": 19808.125, "tile": "colonia" },
-  "Sagittarius A*": { "x": 25.21875, "y": -20.90625, "z": 25899.96875, "tile": "sgr-a" }
+  "Sol": {
+    "x": 0,
+    "y": 0,
+    "z": 0,
+    "tile": "boxel-sol"
+  },
+  "Colonia": {
+    "x": -9530.5,
+    "y": -910.28,
+    "z": 19808.13,
+    "tile": "boxel-colonia"
+  },
+  "Sagittarius A*": {
+    "x": 25.2,
+    "y": -20.9,
+    "z": 25900,
+    "tile": "boxel-core"
+  }
 }

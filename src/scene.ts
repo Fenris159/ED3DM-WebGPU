@@ -8,6 +8,7 @@ export type SceneHandle = {
     systems: System[];
     selected?: System;
     hideImpostors?: boolean;
+    loadedCellIds?: Set<string>;
   }) => void;
   flyCamera: (target: { x: number; y: number; z: number }) => void;
   destroy: () => void;
@@ -18,49 +19,64 @@ function hash01(i: number, seed: number): number {
   return n - Math.floor(n);
 }
 
-function impostorPositions(cells: CatalogCell[]): Float32Array {
-  const pts: number[] = [];
+function impostorOrbs(
+  cells: CatalogCell[],
+  skipIds?: Set<string>,
+): { x: number; y: number; z: number; r: number }[] {
+  const out: { x: number; y: number; z: number; r: number }[] = [];
   for (const cell of cells) {
-    const n = Math.min(cell.count, 48);
+    if (skipIds?.has(cell.id)) continue;
+    const n = Math.min(cell.count, 10);
     const seed = cell.id.length + cell.cx + cell.cz;
+    const r = Math.min(22, Math.max(5, cell.size * 0.018));
     for (let i = 0; i < n; i++) {
-      pts.push(
-        cell.cx + (hash01(i, seed) - 0.5) * cell.size,
-        cell.cy + (hash01(i + 17, seed) - 0.5) * cell.size * 0.2,
-        cell.cz + (hash01(i + 31, seed) - 0.5) * cell.size,
-      );
+      out.push({
+        x: cell.cx + (hash01(i, seed) - 0.5) * cell.size,
+        y: cell.cy + (hash01(i + 17, seed) - 0.5) * cell.size * 0.12,
+        z: cell.cz + (hash01(i + 31, seed) - 0.5) * cell.size,
+        r,
+      });
     }
   }
-  return new Float32Array(pts);
+  return out;
 }
 
-function systemPositions(systems: System[]): Float32Array {
-  const pts = new Float32Array(systems.length * 3);
-  systems.forEach((s, i) => {
-    pts[i * 3] = s.coords.x;
-    pts[i * 3 + 1] = s.coords.y;
-    pts[i * 3 + 2] = s.coords.z;
-  });
-  return pts;
-}
-
-function pointsMesh(
-  positions: Float32Array,
+function instancedBalls(
+  items: { x: number; y: number; z: number; r: number }[],
   color: number,
-  size: number,
-  sizeAttenuation: boolean,
-) {
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-  const mat = new THREE.PointsMaterial({
+  emissive: number,
+): THREE.InstancedMesh {
+  const geo = new THREE.SphereGeometry(1, 14, 10);
+  const mat = new THREE.MeshStandardMaterial({
     color,
-    size,
-    sizeAttenuation,
-    transparent: true,
-    opacity: 0.92,
-    depthWrite: false,
+    emissive,
+    emissiveIntensity: 0.35,
+    roughness: 0.45,
+    metalness: 0.05,
   });
-  return new THREE.Points(geo, mat);
+  const mesh = new THREE.InstancedMesh(geo, mat, items.length);
+  const dummy = new THREE.Object3D();
+  items.forEach((p, i) => {
+    dummy.position.set(p.x, p.y, p.z);
+    dummy.scale.setScalar(p.r);
+    dummy.updateMatrix();
+    mesh.setMatrixAt(i, dummy.matrix);
+  });
+  mesh.instanceMatrix.needsUpdate = true;
+  return mesh;
+}
+
+function disposeMesh(obj: THREE.Object3D | undefined, scene: THREE.Scene) {
+  if (!obj) return;
+  scene.remove(obj);
+  obj.traverse((child) => {
+    if (child instanceof THREE.Mesh || child instanceof THREE.InstancedMesh || child instanceof THREE.LineSegments) {
+      child.geometry.dispose();
+      const mat = child.material;
+      if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
+      else mat.dispose();
+    }
+  });
 }
 
 export async function attachScene(
@@ -79,16 +95,21 @@ export async function attachScene(
   container.appendChild(canvas);
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x07060c);
-  scene.fog = new THREE.FogExp2(0x07060c, 0.000004);
+  scene.background = new THREE.Color(0x05040a);
+  scene.fog = new THREE.FogExp2(0x05040a, 0.000018);
 
   const camera = new THREE.PerspectiveCamera(
     50,
     Math.max(container.clientWidth, 1) / Math.max(container.clientHeight, 1),
-    1,
-    200000,
+    0.5,
+    250000,
   );
-  camera.position.set(4000, 18000, -12000);
+  camera.position.set(-4000, 14000, -6000);
+
+  scene.add(new THREE.AmbientLight(0x8899cc, 0.55));
+  const key = new THREE.DirectionalLight(0xfff4e0, 1.35);
+  key.position.set(-12000, 18000, -8000);
+  scene.add(key);
 
   let renderer: THREE.WebGLRenderer;
   try {
@@ -115,9 +136,9 @@ export async function attachScene(
   controls.rotateSpeed = 0.3;
   controls.zoomSpeed = 2.2;
   controls.panSpeed = 4;
-  controls.maxDistance = 80000;
-  controls.minDistance = 5;
-  controls.target.set(0, 0, 8000);
+  controls.maxDistance = 90000;
+  controls.minDistance = 4;
+  controls.target.set(0, 0, 16000);
   controls.addEventListener("end", () => {
     handlers.onViewIdle?.(
       {
@@ -129,39 +150,48 @@ export async function attachScene(
     );
   });
 
-  let impostors: THREE.Points | undefined;
-  let orbs: THREE.Points | undefined;
+  let impostors: THREE.InstancedMesh | undefined;
+  let orbs: THREE.InstancedMesh | undefined;
   let lines: THREE.LineSegments | undefined;
   let systems: System[] = [];
 
   const raycaster = new THREE.Raycaster();
-  raycaster.params.Points = { threshold: 40 };
 
   function sync(state: {
     cells: CatalogCell[];
     systems: System[];
     selected?: System;
     hideImpostors?: boolean;
+    loadedCellIds?: Set<string>;
   }) {
     systems = state.systems;
-    if (impostors) scene.remove(impostors);
-    if (orbs) scene.remove(orbs);
-    if (lines) scene.remove(lines);
+    disposeMesh(impostors, scene);
+    disposeMesh(orbs, scene);
+    disposeMesh(lines, scene);
     impostors = undefined;
     orbs = undefined;
     lines = undefined;
 
     if (!state.hideImpostors) {
-      impostors = pointsMesh(
-        impostorPositions(state.cells),
-        0xc8d4ff,
-        3,
-        false,
-      );
-      scene.add(impostors);
+      const balls = impostorOrbs(state.cells, state.loadedCellIds);
+      if (balls.length) {
+        impostors = instancedBalls(balls, 0xb8c8ff, 0x223355);
+        scene.add(impostors);
+      }
     }
     if (state.systems.length) {
-      orbs = pointsMesh(systemPositions(state.systems), 0xffe08a, 8, false);
+      orbs = instancedBalls(
+        state.systems.map((s) => ({
+          x: s.coords.x,
+          y: s.coords.y,
+          z: s.coords.z,
+          r: s.name === "Sol" || s.name === "Colonia" || s.name === "Sagittarius A*"
+            ? 7
+            : 4.5,
+        })),
+        0xffe29a,
+        0x664422,
+      );
       scene.add(orbs);
     }
     if (state.selected && state.systems.length > 1) {
@@ -178,27 +208,33 @@ export async function attachScene(
         .filter((n) => n.d > 0 && n.d <= 200 * 200)
         .sort((a, b) => a.d - b.d)
         .slice(0, 5);
-      const verts: number[] = [];
-      for (const n of nearest) {
-        verts.push(
-          origin.x,
-          origin.y,
-          origin.z,
-          n.s.coords.x,
-          n.s.coords.y,
-          n.s.coords.z,
+      if (nearest.length) {
+        const verts: number[] = [];
+        for (const n of nearest) {
+          verts.push(
+            origin.x,
+            origin.y,
+            origin.z,
+            n.s.coords.x,
+            n.s.coords.y,
+            n.s.coords.z,
+          );
+        }
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute(
+          "position",
+          new THREE.BufferAttribute(new Float32Array(verts), 3),
         );
+        lines = new THREE.LineSegments(
+          geo,
+          new THREE.LineBasicMaterial({
+            color: 0x7ec8ff,
+            transparent: true,
+            opacity: 0.7,
+          }),
+        );
+        scene.add(lines);
       }
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute(
-        "position",
-        new THREE.BufferAttribute(new Float32Array(verts), 3),
-      );
-      lines = new THREE.LineSegments(
-        geo,
-        new THREE.LineBasicMaterial({ color: 0x7ec8ff, transparent: true, opacity: 0.7 }),
-      );
-      scene.add(lines);
     }
   }
 
@@ -211,13 +247,14 @@ export async function attachScene(
     raycaster.setFromCamera(ndc, camera);
     if (orbs) {
       const hits = raycaster.intersectObject(orbs);
-      if (hits[0]?.index !== undefined) {
-        handlers.onSelectSystem(hits[0].index);
+      const id = hits[0]?.instanceId;
+      if (id !== undefined) {
+        handlers.onSelectSystem(id);
         return;
       }
     }
     const pt = new THREE.Vector3();
-    raycaster.ray.at(Math.min(controls.getDistance() * 0.4, 4000), pt);
+    raycaster.ray.at(Math.min(controls.getDistance() * 0.35, 5000), pt);
     handlers.onPickCell({ x: pt.x, y: pt.y, z: pt.z });
   });
 
@@ -242,12 +279,15 @@ export async function attachScene(
     sync,
     flyCamera(target) {
       controls.target.set(target.x, target.y, target.z);
-      camera.position.set(target.x, target.y + 80, target.z + 220);
+      camera.position.set(target.x + 22, target.y + 14, target.z + 52);
     },
     destroy() {
       cancelAnimationFrame(raf);
       window.removeEventListener("resize", onResize);
       controls.dispose();
+      disposeMesh(impostors, scene);
+      disposeMesh(orbs, scene);
+      disposeMesh(lines, scene);
       renderer.dispose();
       canvas.remove();
     },

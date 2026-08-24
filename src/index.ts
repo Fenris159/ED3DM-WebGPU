@@ -126,11 +126,21 @@ export const ED3DM = {
 
     let scene: SceneHandle | undefined;
     function paint() {
+      const loadedCellIds = new Set(
+        cells
+          .filter(
+            (c) =>
+              c.tile &&
+              loaded.has(tileUrl(options.catalog.tileBaseUrl, c.tile)),
+          )
+          .map((c) => c.id),
+      );
       scene?.sync({
         cells,
         systems: allSystems(),
         selected,
         hideImpostors: lod === "all",
+        loadedCellIds,
       });
     }
 
