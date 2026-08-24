@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ED3DM</title>
+    <style>
+      html,
+      body,
+      #edmap {
+        margin: 0;
+        height: 100%;
+        background: #07060c;
+        color: #e8eefc;
+        font-family: system-ui, sans-serif;
+      }
+      #hud {
+        position: absolute;
+        z-index: 2;
+        top: 12px;
+        left: 12px;
+        right: 12px;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        pointer-events: none;
+      }
+      #hud * {
+        pointer-events: auto;
+      }
+      #hud input,
+      #hud select,
+      #hud button {
+        background: #14182a;
+        color: #e8eefc;
+        border: 1px solid #3a4466;
+        border-radius: 6px;
+        padding: 8px 10px;
+      }
+      #hud input {
+        flex: 1;
+        max-width: 320px;
+      }
+      #panel {
+        position: absolute;
+        right: 0;
+        top: 56px;
+        bottom: 0;
+        width: min(360px, 92vw);
+        background: #121526ee;
+        transform: translateX(110%);
+        transition: transform 0.2s ease;
+        padding: 16px;
+        overflow: auto;
+      }
+      #panel.open {
+        transform: translateX(0);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="hud">
+      <input id="search" placeholder="Search a System (Sol, Colonia, Sagittarius A*)" />
+      <button id="go" type="button">Go</button>
+      <label>LOD
+        <select id="lod">
+          <option value="0" selected>impostors only</option>
+          <option value="200">200 ly ring</option>
+          <option value="800">800 ly ring</option>
+          <option value="2500">2500 ly ring</option>
+          <option value="all">everything real</option>
+        </select>
+      </label>
+    </div>
+    <aside id="panel"></aside>
+    <div id="edmap"></div>
+    <script type="module" src="/demo/main.ts"></script>
+  </body>
+</html>

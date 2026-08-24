@@ -1,0 +1,12 @@
+{
+  "systems": [
+    {
+      "name": "Colonia",
+      "coords": { "x": -9530.5, "y": -910.28125, "z": 19808.125 },
+      "population": 560000,
+      "primary_economy": "Colony",
+      "allegiance": "Independent",
+      "government": "Cooperative"
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "cells": [
+    { "id": "sol", "cx": 0, "cy": 0, "cz": 0, "size": 80, "count": 8, "tile": "tiles/sol.json" },
+    { "id": "bubble-a", "cx": 120, "cy": 10, "cz": -40, "size": 200, "count": 12 },
+    { "id": "bubble-b", "cx": -90, "cy": -20, "cz": 70, "size": 200, "count": 10 },
+    { "id": "colonia", "cx": -9530.5, "cy": -910.3, "cz": 19808.1, "size": 160, "count": 6, "tile": "tiles/colonia.json" },
+    { "id": "sgr-a", "cx": 25.2, "cy": -20.9, "cz": 25900, "size": 400, "count": 80, "tile": "tiles/core.json" },
+    { "id": "core-a", "cx": 400, "cy": -40, "cz": 25200, "size": 500, "count": 55 },
+    { "id": "core-b", "cx": -300, "cy": 30, "cz": 26400, "size": 500, "count": 48 },
+    { "id": "core-c", "cx": 800, "cy": -80, "cz": 24800, "size": 600, "count": 40 },
+    { "id": "arm-1", "cx": 4000, "cy": 0, "cz": 8000, "size": 1200, "count": 18 },
+    { "id": "arm-2", "cx": -4000, "cy": 20, "cz": 12000, "size": 1200, "count": 16 },
+    { "id": "arm-3", "cx": 2000, "cy": -30, "cz": 18000, "size": 1000, "count": 22 },
+    { "id": "arm-4", "cx": -6000, "cy": 10, "cz": 16000, "size": 1400, "count": 14 },
+    { "id": "rim-1", "cx": 15000, "cy": 0, "cz": 5000, "size": 2500, "count": 6 },
+    { "id": "rim-2", "cx": -15000, "cy": 40, "cz": 8000, "size": 2500, "count": 5 },
+    { "id": "rim-3", "cx": 8000, "cy": -20, "cz": 30000, "size": 2200, "count": 8 },
+    { "id": "rim-4", "cx": -8000, "cy": 15, "cz": -5000, "size": 2200, "count": 4 },
+    { "id": "rim-5", "cx": 0, "cy": 80, "cz": -12000, "size": 2800, "count": 3 }
+  ]
+}
