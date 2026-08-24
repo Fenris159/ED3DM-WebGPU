@@ -2,6 +2,9 @@ import { defineConfig } from "vite";
 import { resolve } from "node:path";
 
 export default defineConfig({
+  resolve: {
+    alias: [{ find: /^three$/, replacement: "three/webgpu" }],
+  },
   build: {
     lib: {
       entry: resolve(__dirname, "src/index.ts"),

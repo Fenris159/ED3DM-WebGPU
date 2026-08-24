@@ -1,5 +1,6 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { BOXEL_ORIGIN, snapDown } from "../boxel";
 import type {
   CatalogCell,
   DensityOverview,
@@ -43,8 +44,9 @@ type Box = {
   systems: System[];
 };
 
-function origin(v: number, size: number): number {
-  return Math.floor(v / size) * size;
+/** Lower face of the Forge cube of `size` that contains Elite-space `v`. */
+function origin(v: number, axis: "x" | "y" | "z", size: number): number {
+  return snapDown(v, BOXEL_ORIGIN[axis], size);
 }
 
 function boxKey(b: Box): string {
@@ -161,9 +163,9 @@ export function convertSystems(
   const grouped = new Map<string, Box>();
   for (const s of systems) {
     const box: Box = {
-      ox: origin(s.coords.x, coarsest),
-      oy: origin(s.coords.y, coarsest),
-      oz: origin(s.coords.z, coarsest),
+      ox: origin(s.coords.x, "x", coarsest),
+      oy: origin(s.coords.y, "y", coarsest),
+      oz: origin(s.coords.z, "z", coarsest),
       size: coarsest,
       systems: [],
     };

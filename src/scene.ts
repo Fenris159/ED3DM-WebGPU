@@ -1,12 +1,21 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import {
-  CSS2DObject,
-  CSS2DRenderer,
-} from "three/examples/jsm/renderers/CSS2DRenderer.js";
-import { orbScale, spectralColor } from "./palettes";
-import { GALACTIC_REGIONS, GALAXY_CORE, GALAXY_RADIUS } from "./regions";
+  boxelGridWorld,
+  boxelSize,
+  clampMassCode,
+  finestMassCode,
+  boxelWindowForView,
+  MAX_BOXEL_FLOATS,
+  type BoxelWindow,
+  type MassCode,
+} from "./boxel";
+import { orbCloud } from "./orbs";
+import { orbScale } from "./palettes";
+import { makeRegionLayerAsync, tintRegionLayer } from "./region-labels";
+import { GALAXY_CORE, GALAXY_RADIUS } from "./regions";
 import type { CatalogCell, Route, System, VisualTheme } from "./types";
+import { drawViewGizmo } from "./view-gizmo";
 
 const PAPER = 0xeaeae8;
 const CHARCOAL = 0x1c1c1b;
@@ -31,12 +40,16 @@ export type SceneHandle = {
     loadedCellIds?: Set<string>;
     routes?: Route[];
     grid?: boolean;
+    regionGrid?: boolean;
     backdrop?: boolean;
     theme?: VisualTheme;
   }) => void;
   flyCamera: (target: { x: number; y: number; z: number }) => void;
-  flyGalaxy: () => void;
+  setPlaneHeight: (y: number) => void;
+  planeHeight: () => number;
+  setMassCode: (code: MassCode) => void;
   setTheme: (theme: VisualTheme) => void;
+  resetTopView: () => void;
   destroy: () => void;
 };
 
@@ -70,130 +83,37 @@ function impostorOrbs(
   return out;
 }
 
-// Solid camera-facing disc (dictionary nodes). Not a shaded sphere, not a glow.
-function makeOrbTexture(): THREE.CanvasTexture {
-  const s = 128;
-  const cnv = document.createElement("canvas");
-  cnv.width = cnv.height = s;
-  const ctx = cnv.getContext("2d");
-  const tex = new THREE.CanvasTexture(cnv);
-  tex.flipY = false;
-  tex.needsUpdate = true;
-  if (!ctx) return tex;
-  const cx = s * 0.5;
-  const cy = s * 0.5;
-  const r = s * 0.48;
-  ctx.clearRect(0, 0, s, s);
-  ctx.beginPath();
-  ctx.arc(cx, cy, r, 0, Math.PI * 2);
-  ctx.fillStyle = "#ffffff";
-  ctx.fill();
-  tex.needsUpdate = true;
-  return tex;
+function regionGridColor(visual: VisualTheme): number {
+  if (visual === "paper") return 0x2a2a28;
+  if (visual === "charcoal") return 0xeceae4;
+  return 0xddd8d0;
 }
 
-function makeNebulaTexture(): THREE.CanvasTexture {
-  const s = 128;
-  const cnv = document.createElement("canvas");
-  cnv.width = cnv.height = s;
-  const ctx = cnv.getContext("2d");
-  const tex = new THREE.CanvasTexture(cnv);
-  tex.flipY = false;
-  if (!ctx) return tex;
-  const g = ctx.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
-  g.addColorStop(0, "rgba(255,255,255,0.55)");
-  g.addColorStop(0.35, "rgba(255,255,255,0.18)");
-  g.addColorStop(1, "rgba(255,255,255,0)");
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, s, s);
-  tex.needsUpdate = true;
-  return tex;
+function boxelGridColor(visual: VisualTheme, major: boolean): number {
+  if (visual === "paper") return major ? 0x8a8880 : 0xb0aea6;
+  return major ? 0x6a6a66 : 0x4a4a48;
 }
 
-const orbVert = `
-attribute float aScale;
-uniform float uPixelRatio;
-uniform float uMaxSize;
-varying vec3 vColor;
-varying float vDepth;
-void main() {
-  vColor = color;
-  vec4 mv = modelViewMatrix * vec4(position, 1.0);
-  gl_Position = projectionMatrix * mv;
-  vDepth = max(0.0, -mv.z);
-  float dist = max(2.0, -mv.z);
-  gl_PointSize = clamp(aScale * 280.0 / dist * uPixelRatio, 2.0, uMaxSize);
-}
-`;
-
-const orbFrag = `
-uniform sampler2D uMap;
-uniform vec3 uFogColor;
-uniform float uFogNear;
-uniform float uFogFar;
-varying vec3 vColor;
-varying float vDepth;
-void main() {
-  vec4 tex = texture2D(uMap, gl_PointCoord);
-  if (tex.a < 0.5) discard;
-  float fog = smoothstep(uFogNear, uFogFar, vDepth);
-  vec3 rgb = mix(vColor, uFogColor, fog);
-  gl_FragColor = vec4(rgb, 1.0);
-}
-`;
-
-function orbCloud(
-  items: { x: number; y: number; z: number; r: number; hex?: string }[],
-  color: THREE.Color,
-  opts: {
-    maxPx: number;
-    map: THREE.Texture;
-    additive?: boolean;
-    fogColor?: number;
-  },
-): THREE.Points {
-  const pos = new Float32Array(items.length * 3);
-  const scale = new Float32Array(items.length);
-  items.forEach((p, i) => {
-    pos[i * 3] = p.x;
-    pos[i * 3 + 1] = p.y;
-    pos[i * 3 + 2] = p.z;
-    scale[i] = p.r;
-  });
+function makeBoxelGrid(theme: VisualTheme): THREE.LineSegments {
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
-  geo.setAttribute("aScale", new THREE.BufferAttribute(scale, 1));
-  const cols = new Float32Array(items.length * 3);
-  const tint = new THREE.Color();
-  for (let i = 0; i < items.length; i++) {
-    if (items[i]?.hex) tint.set(items[i]!.hex!);
-    else tint.copy(color);
-    cols[i * 3] = tint.r;
-    cols[i * 3 + 1] = tint.g;
-    cols[i * 3 + 2] = tint.b;
-  }
-  geo.setAttribute("color", new THREE.BufferAttribute(cols, 3));
-  const mat = new THREE.ShaderMaterial({
-    vertexShader: orbVert,
-    fragmentShader: orbFrag,
-    uniforms: {
-      uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
-      uMaxSize: { value: opts.maxPx },
-      uMap: { value: opts.map },
-      uFogColor: { value: new THREE.Color(opts.fogColor ?? PAPER) },
-      uFogNear: { value: 8000 },
-      uFogFar: { value: 72000 },
-    },
-    transparent: Boolean(opts.additive),
-    depthWrite: !opts.additive,
-    blending: opts.additive ? THREE.AdditiveBlending : THREE.NormalBlending,
-    vertexColors: true,
-    fog: false,
+  const attr = new THREE.BufferAttribute(new Float32Array(MAX_BOXEL_FLOATS), 3);
+  attr.setUsage(THREE.DynamicDrawUsage);
+  geo.setAttribute("position", attr);
+  geo.setDrawRange(0, 0);
+  const mat = new THREE.LineBasicMaterial({
+    color: boxelGridColor(theme, true),
+    transparent: true,
+    opacity: theme === "paper" ? 0.85 : 0.55,
+    depthTest: false,
+    depthWrite: false,
   });
-  const pts = new THREE.Points(geo, mat);
-  pts.frustumCulled = false;
-  return pts;
+  const lines = new THREE.LineSegments(geo, mat);
+  lines.frustumCulled = false;
+  lines.renderOrder = 2;
+  return lines;
 }
+
+
 
 function disposeMesh(obj: THREE.Object3D | undefined, scene: THREE.Scene) {
   if (!obj) return;
@@ -206,8 +126,13 @@ function disposeMesh(obj: THREE.Object3D | undefined, scene: THREE.Scene) {
     ) {
       child.geometry.dispose();
       const mat = child.material;
-      if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
-      else mat.dispose();
+      const drop = (m: THREE.Material) => {
+        const mapped = m as THREE.MeshBasicMaterial;
+        mapped.map?.dispose();
+        m.dispose();
+      };
+      if (Array.isArray(mat)) mat.forEach(drop);
+      else drop(mat);
     }
   });
 }
@@ -218,6 +143,9 @@ export async function attachScene(
     onSelectSystem: (index: number) => void;
     onPickCell: (coords: { x: number; y: number; z: number }) => void;
     onViewIdle?: (coords: { x: number; y: number; z: number }, distance: number) => void;
+    onPlaneHeight?: (y: number) => void;
+    onMassCode?: (code: MassCode, finest: MassCode) => void;
+    viewCompass?: HTMLCanvasElement;
   },
 ): Promise<SceneHandle> {
   const canvas = document.createElement("canvas");
@@ -239,21 +167,15 @@ export async function attachScene(
   );
   camera.position.set(GALAXY_CORE.x - 8000, 22000, GALAXY_CORE.z - 18000);
 
-  const renderer = new THREE.WebGLRenderer({
+  const renderer = new THREE.WebGPURenderer({
     canvas,
     antialias: true,
     alpha: false,
   });
+  await renderer.init();
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setClearColor(PAPER, 1);
   renderer.setSize(container.clientWidth || 800, container.clientHeight || 600);
-
-  const labelRenderer = new CSS2DRenderer();
-  labelRenderer.setSize(container.clientWidth || 800, container.clientHeight || 600);
-  labelRenderer.domElement.style.position = "absolute";
-  labelRenderer.domElement.style.inset = "0";
-  labelRenderer.domElement.style.pointerEvents = "none";
-  container.appendChild(labelRenderer.domElement);
 
   const controls = new OrbitControls(camera, canvas);
   controls.enableDamping = true;
@@ -262,29 +184,40 @@ export async function attachScene(
   controls.zoomSpeed = 2.2;
   controls.panSpeed = 4;
   controls.maxDistance = 120000;
-  controls.minDistance = 4;
+  controls.minDistance =
+    (10 * 2) / (2 * Math.tan((camera.fov * Math.PI) / 360));
+  controls.enablePan = false;
+  controls.screenSpacePanning = false;
+  controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
+  controls.mouseButtons.MIDDLE = THREE.MOUSE.DOLLY;
+  controls.mouseButtons.RIGHT = THREE.MOUSE.PAN;
   controls.target.set(GALAXY_CORE.x, 0, GALAXY_CORE.z);
+  controls.addEventListener("start", () => {
+    cruising = false;
+  });
+  controls.addEventListener("change", () => {
+    lockLookAtToPlane();
+    refreshBoxelGrid();
+  });
   controls.addEventListener("end", () => {
     handlers.onViewIdle?.(
       {
         x: controls.target.x,
-        y: controls.target.y,
+        y: planeY,
         z: controls.target.z,
       },
       controls.getDistance(),
     );
   });
 
-  const orbMap = makeOrbTexture();
-  const nebulaMap = makeNebulaTexture();
-
-  let impostors: THREE.Points | undefined;
-  let orbs: THREE.Points | undefined;
+  let impostors: THREE.Object3D | undefined;
+  let orbs: THREE.Object3D | undefined;
   let lines: THREE.LineSegments | undefined;
   let routesLine: THREE.LineSegments | undefined;
-  let nebula: THREE.Points | undefined;
+  let nebula: THREE.Object3D | undefined;
   let systems: System[] = [];
   let showGrid = true;
+  let showRegionGrid = true;
   let showBackdrop = true;
   let theme: VisualTheme = "paper";
   let lastSync:
@@ -297,19 +230,174 @@ export async function attachScene(
         loadedCellIds?: Set<string>;
         routes?: Route[];
         grid?: boolean;
+        regionGrid?: boolean;
         backdrop?: boolean;
         theme?: VisualTheme;
       }
     | undefined;
 
-  const gridSpan = GALAXY_RADIUS * 2 + 4000;
-  const grid = new THREE.GridHelper(gridSpan, 44, 0xc8c8c2, 0xdddcd6);
-  grid.position.set(GALAXY_CORE.x, 0, GALAXY_CORE.z);
-  grid.visible = true;
+  let massCode: MassCode = "a";
+  let massCodePref: MassCode | undefined;
+  let boxelWin: BoxelWindow | undefined;
+  let grid = makeBoxelGrid(theme);
   scene.add(grid);
 
-  const labelGroup = new THREE.Group();
-  scene.add(labelGroup);
+  const regionGrid = await makeRegionLayerAsync(regionGridColor("paper"));
+  scene.add(regionGrid);
+
+  let planeY = 0;
+  const cruisePos = new THREE.Vector3();
+  const cruiseTarget = new THREE.Vector3();
+  const heightPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  const _panHit = new THREE.Vector3();
+  const _panGrab = new THREE.Vector3();
+  const _panRight = new THREE.Vector3();
+  const _panFwd = new THREE.Vector3();
+  let cruising = false;
+  let planePanning = false;
+  let panLastX = 0;
+  let panLastY = 0;
+
+  function lockLookAtToPlane() {
+    controls.target.y = planeY;
+  }
+
+  function hitHeightPlane(clientX: number, clientY: number, out: THREE.Vector3): boolean {
+    const rect = canvas.getBoundingClientRect();
+    const ndc = new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    raycaster.setFromCamera(ndc, camera);
+    heightPlane.constant = -planeY;
+    return raycaster.ray.intersectPlane(heightPlane, out) !== null;
+  }
+
+  function panOnHeightPlane(dx: number, dz: number) {
+    if (dx === 0 && dz === 0) return;
+    camera.position.x += dx;
+    camera.position.z += dz;
+    controls.target.x += dx;
+    controls.target.z += dz;
+    controls.target.y = planeY;
+    refreshBoxelGrid();
+  }
+
+  function panFromPixels(dxPx: number, dyPx: number) {
+    camera.updateMatrixWorld();
+    _panRight.setFromMatrixColumn(camera.matrixWorld, 0);
+    _panRight.y = 0;
+    if (_panRight.lengthSq() < 1e-8) _panRight.set(1, 0, 0);
+    else _panRight.normalize();
+    _panFwd.crossVectors(camera.up, _panRight);
+    if (_panFwd.lengthSq() < 1e-8) _panFwd.set(0, 0, 1);
+    else _panFwd.normalize();
+    const dist = Math.max(8, controls.getDistance());
+    const s =
+      (2 * dist * Math.tan((camera.fov * Math.PI) / 360)) /
+      Math.max(canvas.clientHeight, 1);
+    panOnHeightPlane(
+      -dxPx * s * _panRight.x - dyPx * s * _panFwd.x,
+      -dxPx * s * _panRight.z - dyPx * s * _panFwd.z,
+    );
+  }
+
+  function planeViewAabb(): { minX: number; maxX: number; minZ: number; maxZ: number } {
+    const S = boxelSize(massCode);
+    const dist = Math.max(
+      Math.abs(camera.position.y - planeY),
+      controls.getDistance(),
+      1,
+    );
+    const half = Math.max(
+      S * 12,
+      dist * Math.tan((camera.fov * Math.PI) / 360) * Math.max(camera.aspect, 1) * 1.5,
+    );
+    const cx = controls.target.x;
+    const cz = controls.target.z;
+    return {
+      minX: cx - half,
+      maxX: cx + half,
+      minZ: cz - half,
+      maxZ: cz + half,
+    };
+  }
+
+  let lastFinest: MassCode | undefined;
+
+  function syncMassCodeForZoom() {
+    const finest = finestMassCode(
+      controls.getDistance(),
+      camera.fov,
+      container.clientHeight || 600,
+    );
+    const preferred = massCodePref ?? finest;
+    const next = clampMassCode(preferred, finest);
+    const codeChanged = next !== massCode;
+    if (codeChanged) {
+      massCode = next;
+      boxelWin = undefined;
+    }
+    if (codeChanged || finest !== lastFinest) {
+      lastFinest = finest;
+      handlers.onMassCode?.(massCode, finest);
+    }
+  }
+
+  function fitCameraNear() {
+    const dist = Math.max(controls.getDistance(), 0.5);
+    const near = Math.max(0.02, Math.min(2, dist * 0.05));
+    if (Math.abs(camera.near - near) > 0.01) {
+      camera.near = near;
+      camera.updateProjectionMatrix();
+    }
+    const minD =
+      (boxelSize("a") * 2) / (2 * Math.tan((camera.fov * Math.PI) / 360));
+    if (Math.abs(controls.minDistance - minD) > 0.5) controls.minDistance = minD;
+  }
+
+  function refreshBoxelGrid() {
+    grid.position.set(0, planeY, 0);
+    fitCameraNear();
+    syncMassCodeForZoom();
+    const next = boxelWindowForView(planeViewAabb(), massCode, boxelWin, {
+      x: controls.target.x,
+      z: controls.target.z,
+    });
+    if (next === boxelWin) return;
+    boxelWin = next;
+    const attr = grid.geometry.getAttribute("position") as THREE.BufferAttribute;
+    const filled = boxelGridWorld(next, attr.array as Float32Array);
+    attr.clearUpdateRanges();
+    attr.addUpdateRange(0, filled.length);
+    attr.needsUpdate = true;
+    grid.geometry.setDrawRange(0, filled.length / 3);
+    grid.geometry.computeBoundingSphere();
+  }
+
+  function rebuildBoxelGrid() {
+    boxelWin = undefined;
+    refreshBoxelGrid();
+  }
+
+  function applyPlaneY(y: number, moveCamera: boolean) {
+    const dy = y - planeY;
+    if (Math.abs(dy) < 0.05) return;
+    planeY = y;
+    refreshBoxelGrid();
+    regionGrid.position.y = planeY;
+    if (moveCamera) {
+      camera.position.y += dy;
+      controls.target.y += dy;
+    }
+    handlers.onPlaneHeight?.(planeY);
+  }
+
+  function pickBand(): number {
+    return Math.max(80, Math.min(350, controls.getDistance() * 0.03));
+  }
+
+  refreshBoxelGrid();
 
   const ringGeo = new THREE.RingGeometry(1.15, 1.4, 64);
   const ringMat = new THREE.MeshBasicMaterial({
@@ -356,9 +444,9 @@ export async function attachScene(
     }
     nebula = orbCloud(items, new THREE.Color(0x888888), {
       maxPx: visual === "paper" ? 48 : 90,
-      map: nebulaMap,
       additive: visual !== "paper",
       fogColor: visual === "paper" ? PAPER : visual === "charcoal" ? CHARCOAL : SPACE,
+      soft: true,
     });
     scene.add(nebula);
   }
@@ -368,15 +456,10 @@ export async function attachScene(
     const bg = visual === "paper" ? PAPER : visual === "charcoal" ? CHARCOAL : SPACE;
     scene.background = new THREE.Color(bg);
     renderer.setClearColor(bg, 1);
-    const major = visual === "paper" ? 0xb8b8b2 : 0x3a3a38;
-    const minor = visual === "paper" ? 0xd8d8d2 : 0x2a2a28;
-    grid.material = Array.isArray(grid.material)
-      ? grid.material
-      : grid.material;
-    const mats = Array.isArray(grid.material) ? grid.material : [grid.material];
-    mats.forEach((m, i) => {
-      if ("color" in m) (m as THREE.LineBasicMaterial).color.set(i === 0 ? major : minor);
-    });
+    const gmat = grid.material as THREE.LineBasicMaterial;
+    gmat.color.set(boxelGridColor(visual, true));
+    gmat.opacity = visual === "paper" ? 0.7 : 0.45;
+    tintRegionLayer(regionGrid, regionGridColor(visual), visual === "paper" ? 0.94 : 0.9);
     ringMat.color.set(visual === "paper" ? 0x1a1a19 : 0xe8e8e2);
     container.dataset.theme = visual;
   }
@@ -390,15 +473,18 @@ export async function attachScene(
     loadedCellIds?: Set<string>;
     routes?: Route[];
     grid?: boolean;
+    regionGrid?: boolean;
     backdrop?: boolean;
     theme?: VisualTheme;
   }) {
     lastSync = state;
     systems = state.systems;
     showGrid = state.grid !== false;
+    showRegionGrid = state.regionGrid !== false;
     showBackdrop = state.backdrop !== false;
     if (state.theme && state.theme !== theme) applyTheme(state.theme);
     grid.visible = showGrid;
+    regionGrid.visible = showRegionGrid;
     if (showBackdrop && !nebula) ensureNebula(theme);
     if (nebula) nebula.visible = showBackdrop;
 
@@ -410,11 +496,6 @@ export async function attachScene(
     orbs = undefined;
     lines = undefined;
     routesLine = undefined;
-    while (labelGroup.children.length) {
-      const child = labelGroup.children[0] as CSS2DObject;
-      child.element.remove();
-      labelGroup.remove(child);
-    }
 
     const fogColor = theme === "paper" ? PAPER : theme === "charcoal" ? CHARCOAL : SPACE;
     const additive = theme !== "paper";
@@ -431,7 +512,6 @@ export async function attachScene(
       if (balls.length) {
         impostors = orbCloud(balls, new THREE.Color(0x4a4a46), {
           maxPx: 12,
-          map: orbMap,
           additive,
           fogColor,
         });
@@ -448,17 +528,9 @@ export async function attachScene(
           hex: state.colors?.[i],
         })),
         new THREE.Color(0x2e2e2c),
-        { maxPx: 55, map: orbMap, additive, fogColor },
+        { maxPx: 55, additive, fogColor },
       );
       scene.add(orbs);
-    }
-    for (const region of GALACTIC_REGIONS) {
-      const el = document.createElement("div");
-      el.className = "region-label";
-      el.textContent = region.name.toUpperCase();
-      const tag = new CSS2DObject(el);
-      tag.position.set(region.coords.x, region.coords.y, region.coords.z);
-      labelGroup.add(tag);
     }
     ring.visible = Boolean(state.selected);
     if (state.selected) {
@@ -538,7 +610,8 @@ export async function attachScene(
     }
   }
 
-  canvas.addEventListener("pointerdown", (ev) => {
+  function onPickPointerDown(ev: PointerEvent) {
+    if (ev.button !== 0) return;
     const rect = canvas.getBoundingClientRect();
     const ndc = new THREE.Vector2(
       ((ev.clientX - rect.left) / rect.width) * 2 - 1,
@@ -546,17 +619,74 @@ export async function attachScene(
     );
     raycaster.setFromCamera(ndc, camera);
     if (orbs) {
-      raycaster.params.Points = { threshold: 25 };
       const hits = raycaster.intersectObject(orbs);
-      if (hits[0]?.index !== undefined) {
-        handlers.onSelectSystem(hits[0].index);
+      const band = pickBand();
+      for (const hit of hits) {
+        const id = hit.instanceId ?? hit.index;
+        if (id === undefined) continue;
+        const sys = systems[id];
+        if (!sys) continue;
+        if (Math.abs(sys.coords.y - planeY) > band) continue;
+        handlers.onSelectSystem(id);
         return;
       }
     }
     const pt = new THREE.Vector3();
     raycaster.ray.at(Math.min(controls.getDistance() * 0.35, 5000), pt);
     handlers.onPickCell({ x: pt.x, y: pt.y, z: pt.z });
-  });
+  }
+
+  function onPlanePanDown(ev: PointerEvent) {
+    if (ev.button !== 2) return;
+    ev.preventDefault();
+    cruising = false;
+    planePanning = true;
+    panLastX = ev.clientX;
+    panLastY = ev.clientY;
+    hitHeightPlane(ev.clientX, ev.clientY, _panGrab);
+    canvas.setPointerCapture(ev.pointerId);
+  }
+
+  function onPlanePanMove(ev: PointerEvent) {
+    if (!planePanning) return;
+    if (hitHeightPlane(ev.clientX, ev.clientY, _panHit)) {
+      panOnHeightPlane(_panGrab.x - _panHit.x, _panGrab.z - _panHit.z);
+    } else {
+      panFromPixels(ev.clientX - panLastX, ev.clientY - panLastY);
+    }
+    panLastX = ev.clientX;
+    panLastY = ev.clientY;
+  }
+
+  function onPlanePanUp(ev: PointerEvent) {
+    if (!planePanning) return;
+    if (ev.type === "pointerup" && ev.button !== 2) return;
+    planePanning = false;
+    try {
+      canvas.releasePointerCapture(ev.pointerId);
+    } catch {
+      /* not captured */
+    }
+    handlers.onViewIdle?.(
+      {
+        x: controls.target.x,
+        y: planeY,
+        z: controls.target.z,
+      },
+      controls.getDistance(),
+    );
+  }
+
+  function onContextMenu(ev: Event) {
+    ev.preventDefault();
+  }
+
+  canvas.addEventListener("pointerdown", onPickPointerDown);
+  canvas.addEventListener("pointerdown", onPlanePanDown);
+  canvas.addEventListener("pointermove", onPlanePanMove);
+  canvas.addEventListener("pointerup", onPlanePanUp);
+  canvas.addEventListener("pointercancel", onPlanePanUp);
+  canvas.addEventListener("contextmenu", onContextMenu);
 
   function onResize() {
     const w = container.clientWidth || 800;
@@ -564,7 +694,6 @@ export async function attachScene(
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
     renderer.setSize(w, h);
-    labelRenderer.setSize(w, h);
   }
   window.addEventListener("resize", onResize);
 
@@ -581,25 +710,53 @@ export async function attachScene(
   let raf = 0;
   function loop() {
     raf = requestAnimationFrame(loop);
-    controls.update();
+    if (cruising) {
+      camera.position.lerp(cruisePos, 0.12);
+      controls.target.lerp(cruiseTarget, 0.12);
+      lockLookAtToPlane();
+      if (camera.position.distanceTo(cruisePos) < 1.5) cruising = false;
+    } else {
+      controls.update();
+      lockLookAtToPlane();
+    }
+    refreshBoxelGrid();
     if (ring.visible) ring.lookAt(camera.position);
     const d = controls.getDistance();
     ring.scale.setScalar(Math.max(1.2, Math.min(18, d * 0.018)));
-    labelGroup.visible = d > 6000;
+    if (handlers.viewCompass) drawViewGizmo(handlers.viewCompass, camera, theme);
     renderer.render(scene, camera);
-    labelRenderer.render(scene, camera);
   }
   loop();
 
   return {
     sync,
     flyCamera(target) {
-      controls.target.set(target.x, target.y, target.z);
-      camera.position.set(target.x + 22, target.y + 14, target.z + 52);
+      cruiseTarget.set(target.x, planeY, target.z);
+      cruisePos.set(target.x + 22, planeY + 14, target.z + 52);
+      cruising = true;
     },
-    flyGalaxy() {
-      controls.target.set(GALAXY_CORE.x, 0, GALAXY_CORE.z);
-      camera.position.set(GALAXY_CORE.x - 8000, 22000, GALAXY_CORE.z - 18000);
+    setPlaneHeight(y) {
+      applyPlaneY(y, true);
+    },
+    planeHeight() {
+      return planeY;
+    },
+    setMassCode(code) {
+      const finest = finestMassCode(
+        controls.getDistance(),
+        camera.fov,
+        container.clientHeight || 600,
+      );
+      const next = clampMassCode(code, finest);
+      massCodePref = code === next ? next : undefined;
+      lastFinest = finest;
+      if (next === massCode) {
+        handlers.onMassCode?.(massCode, finest);
+        return;
+      }
+      massCode = next;
+      rebuildBoxelGrid();
+      handlers.onMassCode?.(massCode, finest);
     },
     setTheme(next) {
       applyTheme(next);
@@ -607,9 +764,43 @@ export async function attachScene(
       nebula = undefined;
       if (lastSync) sync({ ...lastSync, theme: next });
     },
+    resetTopView() {
+      cruising = false;
+      const d = Math.max(80, controls.getDistance());
+      const tx = controls.target.x;
+      const tz = controls.target.z;
+      const oc = controls as OrbitControls & {
+        _sphericalDelta: THREE.Spherical;
+        _panOffset: THREE.Vector3;
+        _scale: number;
+      };
+      oc._sphericalDelta.set(0, 0, 0);
+      oc._panOffset.set(0, 0, 0);
+      oc._scale = 1;
+      controls.target.set(tx, planeY, tz);
+      camera.up.set(0, 1, 0);
+      const phi = 0.04;
+      camera.position.set(
+        tx,
+        planeY + d * Math.cos(phi),
+        tz - d * Math.sin(phi),
+      );
+      const damping = controls.enableDamping;
+      controls.enableDamping = false;
+      controls.update();
+      controls.enableDamping = damping;
+      lockLookAtToPlane();
+      refreshBoxelGrid();
+    },
     destroy() {
       cancelAnimationFrame(raf);
       window.removeEventListener("resize", onResize);
+      canvas.removeEventListener("pointerdown", onPickPointerDown);
+      canvas.removeEventListener("pointerdown", onPlanePanDown);
+      canvas.removeEventListener("pointermove", onPlanePanMove);
+      canvas.removeEventListener("pointerup", onPlanePanUp);
+      canvas.removeEventListener("pointercancel", onPlanePanUp);
+      canvas.removeEventListener("contextmenu", onContextMenu);
       canvas.removeEventListener("webglcontextlost", onContextLost);
       canvas.removeEventListener("webglcontextrestored", onContextRestored);
       controls.dispose();
@@ -618,20 +809,12 @@ export async function attachScene(
       disposeMesh(lines, scene);
       disposeMesh(routesLine, scene);
       disposeMesh(nebula, scene);
-      nebulaMap.dispose();
-      while (labelGroup.children.length) {
-        const child = labelGroup.children[0] as CSS2DObject;
-        child.element.remove();
-        labelGroup.remove(child);
-      }
-      scene.remove(labelGroup);
+      disposeMesh(regionGrid, scene);
       scene.remove(grid);
       scene.remove(ring);
       ringGeo.dispose();
       ringMat.dispose();
-      orbMap.dispose();
       renderer.dispose();
-      labelRenderer.domElement.remove();
       canvas.remove();
     },
   };

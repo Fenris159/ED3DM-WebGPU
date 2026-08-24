@@ -4,7 +4,7 @@ Embeddable Elite Dangerous 3D galaxy map. **Operators host their own Catalog.** 
 
 Three pieces:
 
-1. **ED3DM** — React-free TypeScript renderer (`ED3DM.create`). WebGL2 (WebGPU skipped while orbs are ShaderMaterial sprites).
+1. **ED3DM** — React-free TypeScript renderer (`ED3DM.create`). WebGPU with WebGL2 fallback. Orbs are TSL instanced discs (WebGPU point primitives are 1px).
 2. **Map app** — first-party Host: orbit, search, side panel, LOD, color-by, grid, Milky Way backdrop.
 3. **Converter** — CLI the Operator runs on their machine. Never a GitHub Action.
 

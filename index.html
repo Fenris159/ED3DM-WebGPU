@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Oxanium:wght@500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&display=swap"
       rel="stylesheet"
     />
     <style>
@@ -38,6 +38,7 @@
         color: var(--ink);
         font-family: "Source Serif 4", "Iowan Old Style", Palatino, "Times New Roman", serif;
       }
+      html,
       body {
         overflow: hidden;
       }
@@ -59,14 +60,16 @@
       #edmap {
         position: relative;
         z-index: 1;
+        overflow: hidden;
       }
       #hud {
-        position: absolute;
+        position: fixed;
         z-index: 4;
         top: 22px;
         left: 22px;
         right: 22px;
         display: flex;
+        flex-wrap: wrap;
         gap: 10px;
         align-items: center;
         pointer-events: none;
@@ -99,11 +102,38 @@
         align-items: center;
         gap: 6px;
       }
+      #view-anchor {
+        position: fixed;
+        z-index: 6;
+        left: 18px;
+        bottom: 16px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        pointer-events: none;
+      }
+      #view-compass {
+        pointer-events: auto;
+        width: 72px;
+        height: 72px;
+        padding: 0;
+        border: 1px solid var(--line);
+        border-radius: 50%;
+        background: color-mix(in srgb, var(--paper) 82%, white);
+        cursor: pointer;
+        display: grid;
+        place-items: center;
+      }
+      #view-compass canvas {
+        width: 72px;
+        height: 72px;
+        display: block;
+        pointer-events: none;
+      }
+      #view-compass:hover {
+        border-color: var(--ink);
+      }
       #wordmark {
-        position: absolute;
-        z-index: 4;
-        left: 28px;
-        bottom: 24px;
         font-size: 14px;
         letter-spacing: 0.16em;
         text-transform: uppercase;
@@ -111,7 +141,7 @@
         pointer-events: none;
       }
       #hint {
-        position: absolute;
+        position: fixed;
         z-index: 4;
         left: 50%;
         bottom: 22px;
@@ -126,7 +156,7 @@
         pointer-events: none;
       }
       #panel {
-        position: absolute;
+        position: fixed;
         right: 18px;
         top: 72px;
         bottom: 72px;
@@ -137,6 +167,8 @@
         transform: translateX(calc(100% + 28px));
         transform-origin: right center;
         transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1);
+        visibility: hidden;
+        pointer-events: none;
         padding: 28px 26px;
         overflow: auto;
         z-index: 5;
@@ -144,6 +176,8 @@
       }
       #panel.open {
         transform: translateX(0);
+        visibility: visible;
+        pointer-events: auto;
       }
       #panel h2 {
         font-weight: 500;
@@ -179,7 +213,7 @@
         user-select: none;
       }
       #theme-picker {
-        position: absolute;
+        position: fixed;
         z-index: 6;
         right: 22px;
         bottom: 22px;
@@ -212,6 +246,114 @@
         outline: 2px solid var(--ink);
         outline-offset: 1px;
       }
+      #height-rail {
+        position: fixed;
+        z-index: 6;
+        left: 14px;
+        top: 88px;
+        bottom: 88px;
+        width: 52px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 10px;
+        pointer-events: none;
+      }
+      #height-rail * {
+        pointer-events: auto;
+      }
+      #height-rail span {
+        font-size: 10px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--mute);
+        text-align: center;
+      }
+      .height-track {
+        position: relative;
+        flex: 1;
+        width: 22px;
+        min-height: 120px;
+      }
+      .height-gutter {
+        position: absolute;
+        left: 50%;
+        top: 6px;
+        bottom: 6px;
+        width: 2px;
+        transform: translateX(-50%);
+        background: var(--line);
+        pointer-events: none;
+      }
+      .height-fill {
+        position: absolute;
+        left: 50%;
+        width: 2px;
+        transform: translateX(-50%);
+        background: var(--ink);
+        pointer-events: none;
+        top: 50%;
+        height: 0;
+      }
+      #height {
+        position: absolute;
+        inset: 0;
+        writing-mode: vertical-lr;
+        direction: rtl;
+        appearance: none;
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        background: transparent;
+        border: none;
+        cursor: pointer;
+      }
+      #height::-webkit-slider-runnable-track {
+        background: transparent;
+        width: 18px;
+      }
+      #height::-moz-range-track {
+        background: transparent;
+        width: 18px;
+      }
+      #height::-webkit-slider-thumb {
+        appearance: none;
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: var(--ink);
+        border: 2px solid var(--paper);
+      }
+      #height::-moz-range-thumb {
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: var(--ink);
+        border: 2px solid var(--paper);
+      }
+      .height-nudge {
+        flex: none;
+        width: 22px;
+        height: 22px;
+        padding: 0;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        background: color-mix(in srgb, var(--paper) 86%, white);
+        color: var(--ink);
+        cursor: pointer;
+        font-size: 9px;
+        line-height: 1;
+        display: grid;
+        place-items: center;
+      }
+      .height-nudge:hover:not(:disabled) {
+        border-color: var(--ink);
+      }
+      .height-nudge:disabled {
+        opacity: 0.35;
+        cursor: default;
+      }
 
     </style>
   </head>
@@ -243,11 +385,40 @@
           <option value="colonia">colonia</option>
         </select>
       </label>
+      <label>Boxel
+        <select id="masscode" title="Zoom in to unlock finer boxels">
+          <option value="a" selected>a · 10 ly</option>
+          <option value="b">b · 20 ly</option>
+          <option value="c">c · 40 ly</option>
+          <option value="d">d · 80 ly</option>
+          <option value="e">e · 160 ly</option>
+          <option value="f">f · 320 ly</option>
+          <option value="g">g · 640 ly</option>
+          <option value="h">h · 1280 ly</option>
+        </select>
+      </label>
       <label><input id="grid" type="checkbox" checked /> grid</label>
+      <label><input id="regions" type="checkbox" checked /> regions</label>
       <label><input id="backdrop" type="checkbox" checked /> dust</label>
     </div>
     <aside id="panel"></aside>
-    <div id="wordmark">ED3DM</div>
+    <div id="height-rail">
+      <span>height</span>
+      <button type="button" class="height-nudge" id="height-up" aria-label="Raise height 10 light years" title="+10 ly">▲</button>
+      <div class="height-track">
+        <div class="height-gutter"></div>
+        <div class="height-fill" id="height-fill"></div>
+        <input id="height" type="range" min="-10000" max="10000" value="0" step="10" aria-label="Galactic height" />
+      </div>
+      <button type="button" class="height-nudge" id="height-down" aria-label="Lower height 10 light years" title="-10 ly">▼</button>
+      <span id="height-readout">0 ly</span>
+    </div>
+    <div id="view-anchor">
+      <button type="button" id="view-compass" aria-label="Reset to top-down view" title="Reset view">
+        <canvas id="view-compass-canvas" width="144" height="144"></canvas>
+      </button>
+      <div id="wordmark">ED3DM</div>
+    </div>
     <div id="hint">Drag to rotate · Scroll to zoom</div>
     <div id="theme-picker" role="group" aria-label="Map colors">
       <button type="button" data-theme="paper" aria-pressed="true" title="Paper"></button>

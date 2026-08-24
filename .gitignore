@@ -3,3 +3,5 @@ dist
 .tmp-catalog
 .DS_Store
 *.log
+scripts/RegionMapData.json
+scripts/RegionMap.js

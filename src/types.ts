@@ -47,6 +47,9 @@ export type ColorByMode =
 
 export type VisualTheme = "paper" | "charcoal" | "realistic";
 
+import type { MassCode } from "./boxel";
+export type { MassCode };
+
 export type CatalogOptions = {
   overviewUrl: string;
   tileBaseUrl?: string;
@@ -59,4 +62,7 @@ export type CreateOptions = {
   catalog: CatalogOptions;
   lod?: LodSetting;
   onSystemClick?: (system: System | undefined) => void;
+  onPlaneHeight?: (y: number) => void;
+  onMassCode?: (code: MassCode, finest: MassCode) => void;
+  viewCompass?: HTMLCanvasElement;
 };

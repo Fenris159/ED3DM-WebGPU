@@ -4,6 +4,7 @@ import type {
   CreateOptions,
   DensityOverview,
   LodSetting,
+  MassCode,
   Route,
   System,
   TileFile,
@@ -18,7 +19,16 @@ export type {
   LodSetting,
   System,
   VisualTheme,
+  MassCode,
 } from "./types";
+export {
+  MASS_CODES,
+  BOXEL_ORIGIN,
+  boxelSize,
+  boxelToPlayer,
+  containingBoxel,
+  playerToBoxel,
+} from "./boxel";
 export { colorFor } from "./palettes";
 
 export type Ed3dmMap = {
@@ -28,8 +38,13 @@ export type Ed3dmMap = {
   setFilter: (filter: { categories?: string[] }) => void;
   setColorBy: (mode: ColorByMode) => void;
   setGrid: (on: boolean) => void;
+  setRegionGrid: (on: boolean) => void;
   setBackdrop: (on: boolean) => void;
   setTheme: (theme: VisualTheme) => void;
+  setPlaneHeight: (y: number) => void;
+  planeHeight: () => number;
+  setMassCode: (code: MassCode) => void;
+  resetTopView: () => void;
   clearSelection: () => void;
   destroy: () => void;
   loadedTiles: () => string[];
@@ -76,6 +91,7 @@ export const ED3DM = {
     let colorBy: ColorByMode = "none";
     let categoryFilter: string[] | undefined;
     let showGrid = true;
+    let showRegionGrid = true;
     let showBackdrop = true;
     let theme: VisualTheme = "paper";
     let routes: Route[] = [];
@@ -210,6 +226,7 @@ export const ED3DM = {
         loadedCellIds,
         routes,
         grid: showGrid,
+        regionGrid: showRegionGrid,
         backdrop: showBackdrop,
         theme,
       });
@@ -266,6 +283,10 @@ export const ED3DM = {
         showGrid = on;
         paint();
       },
+      setRegionGrid(on) {
+        showRegionGrid = on;
+        paint();
+      },
       setBackdrop(on) {
         showBackdrop = on;
         paint();
@@ -275,10 +296,21 @@ export const ED3DM = {
         scene?.setTheme(next);
         paint();
       },
+      setPlaneHeight(y) {
+        scene?.setPlaneHeight(y);
+      },
+      planeHeight() {
+        return scene?.planeHeight() ?? 0;
+      },
+      setMassCode(code) {
+        scene?.setMassCode(code);
+      },
+      resetTopView() {
+        scene?.resetTopView();
+      },
       clearSelection() {
         selected = undefined;
         options.onSystemClick?.(undefined);
-        scene?.flyGalaxy();
         paint();
       },
       destroy() {
@@ -316,7 +348,9 @@ export const ED3DM = {
       try {
         const probe = document.createElement("canvas");
         hasGpu = Boolean(
-          probe.getContext("webgl2") || probe.getContext("webgl"),
+          (typeof navigator !== "undefined" && "gpu" in navigator) ||
+            probe.getContext("webgl2") ||
+            probe.getContext("webgl"),
         );
       } catch {
         hasGpu = false;
@@ -346,7 +380,6 @@ export const ED3DM = {
             if (selected) {
               selected = undefined;
               options.onSystemClick?.(undefined);
-              scene?.flyGalaxy();
               paint();
             }
             void map.focus(coords);
@@ -354,6 +387,13 @@ export const ED3DM = {
           onViewIdle(coords, distance) {
             if (distance < 8000) void map.focus(coords);
           },
+          onPlaneHeight(y) {
+            options.onPlaneHeight?.(y);
+          },
+          onMassCode(code, finest) {
+            options.onMassCode?.(code, finest);
+          },
+          viewCompass: options.viewCompass,
         });
         paint();
       } catch {

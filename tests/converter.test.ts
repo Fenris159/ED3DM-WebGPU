@@ -98,6 +98,21 @@ describe("Converter", () => {
     expect(catalog.bodies?.Sol[0]?.name).toBe("Earth");
   });
 
+  it("bins tiles onto Stellar Forge boxels, not cubes that treat Sol as a corner", () => {
+    const catalog = convertSystems([sys("Sol", 0, 0, 0), sys("Near", 1, 1, 1)], {
+      budget: 10,
+      finest: 10,
+      coarsest: 80,
+    });
+    expect(catalog.overview.cells).toHaveLength(1);
+    const cell = catalog.overview.cells[0]!;
+    expect(cell.size).toBe(80);
+    expect(cell.cx).toBe(-65 + 40);
+    expect(cell.cy).toBe(-25 + 40);
+    expect(cell.cz).toBe(-25 + 40);
+    expect(catalog.tiles[cell.tile!]?.systems[0]?.coords).toEqual({ x: 0, y: 0, z: 0 });
+  });
+
   it("writes the Catalog layout the Map app already loads", () => {
     const dir = mkdtempSync(join(tmpdir(), "ed3dm-cat-"));
     const catalog = convertSystems(

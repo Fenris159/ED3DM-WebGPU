@@ -93,6 +93,12 @@ describe("color-by and Category filters", () => {
     map.setTheme("charcoal");
     map.setTheme("realistic");
     map.setTheme("paper");
+    map.setGrid(false);
+    map.setRegionGrid(false);
+    map.setBackdrop(false);
+    map.setPlaneHeight(120);
+    map.setMassCode("h");
+    expect(map.planeHeight()).toBe(0);
     expect(map.orbColor("missing")).toBeUndefined();
   });
 

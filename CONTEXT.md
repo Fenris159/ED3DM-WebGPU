@@ -57,15 +57,15 @@ One static Catalog file for a boxel of Systems (real orbs). Tile *size* follows 
 _Avoid_: one tile size for the whole galaxy; making “load everything” the default
 
 **Boxel**:
-Elite’s nested cubic grid of space (from **id64** / procedural name). Sizes run **a** (10 ly) up to **h** (1280 ly, one cube per **sector**). A spatial index we can tile a Catalog with. Not a list of “zoom levels” that each contain the same stars.
-_Avoid_: treating mass code as a camera LOD slider
+Elite’s nested cubic grid of space (from **id64** / procedural name). Sizes run **a** (10 ly) up to **h** (1280 ly, one cube per **sector**). Origin in Elite space is **BOXEL_ORIGIN** (−49985, −40985, −24105), *not* Sol. Catalog tiles, the drawn grid, and procedural names use this lattice. Sol sits inside a cube: the mass-code **d** (80 ly) corner is (−65, −25, −25).
+_Avoid_: treating mass code as a camera LOD slider; treating Sol as a boxel corner; placing Systems in boxel-grid coordinates
 
 **Mass code**:
 A letter **a–h** on a procedural System (and in **id64**). It is the size of *that System’s* boxel and a hint about stellar mass. Each System has one mass code; zooming in does not “reveal” extra mass codes of the same star.
 _Avoid_: “load mass code h when far, mass code a when close” as if they were mipmaps of one point cloud
 
 **Sector**:
-A 1280 ly cube of the galaxy (procedural name like Eol Prou, or a hand-authored volume). Contains nested boxels.
+A 1280 ly cube of the galaxy (procedural name like Eol Prou, or a hand-authored volume). Contains nested boxels. Same Forge origin as Boxel.
 _Avoid_: Region (codex regions are coarser named volumes, a different partition)
 
 **LOD**:
@@ -77,8 +77,8 @@ A compact name → Elite-space position table so the Map app can snap to a Syste
 _Avoid_: searching only among currently rendered orbs; scanning nightly dumps in the browser
 
 **Elite space**:
-The native coordinate space: in-game light years, Sol at the origin, same numbers as EDSM `coords.{x,y,z}` and EDDN `StarPos` `[x,y,z]`. ED3D JSON is adapted into this space (Z negated on ingest).
-_Avoid_: “ED3D coordinates” as native; treating Three.js world axes as the Host-facing API
+The native coordinate space players use: in-game light years, **Sol at (0,0,0)**, same numbers as EDSM `coords.{x,y,z}` and EDDN `StarPos` `[x,y,z]`. Orbs, distances, and the Host API live here. The Forge boxel origin is a different point; converting is a translation by BOXEL_ORIGIN. ED3D JSON is adapted into this space (Z negated on ingest).
+_Avoid_: “ED3D coordinates” as native; treating Three.js world axes as the Host-facing API; treating (0,0,0) as a boxel corner
 
 **EDSM**:
 Third-party catalog of systems in Elite space. The authoritative *source* of stars for ED3DM, via its nightly dumps — not something ED3DM fetches in the browser.

@@ -8,6 +8,27 @@ mkdirSync(join(dir, "tiles"), { recursive: true });
 const SGR = { x: 25.2, y: -20.9, z: 25900 };
 const COLONIA = { x: -9530.5, y: -910.28, z: 19808.13 };
 const RADIUS = 40000;
+/** Stellar Forge lattice origin in Elite space (Sol is (0,0,0), not a cube corner). */
+const BOXEL_ORIGIN = { x: -49985, y: -40985, z: -24105 };
+
+function snapDown(coord, origin, size) {
+  return origin + Math.floor((coord - origin) / size) * size;
+}
+
+function forgeCell(id, coords, size, count, tile) {
+  const ox = snapDown(coords.x, BOXEL_ORIGIN.x, size);
+  const oy = snapDown(coords.y, BOXEL_ORIGIN.y, size);
+  const oz = snapDown(coords.z, BOXEL_ORIGIN.z, size);
+  return {
+    id,
+    cx: ox + size / 2,
+    cy: oy + size / 2,
+    cz: oz + size / 2,
+    size,
+    count,
+    tile,
+  };
+}
 
 function hash01(i, seed) {
   const n = Math.sin(i * 12.9898 + seed * 78.233) * 43758.5453;
@@ -65,33 +86,11 @@ for (let iz = -RADIUS; iz <= RADIUS; iz += step) {
   }
 }
 
-cells.push({
-  id: "boxel-sol",
-  cx: 0,
-  cy: 0,
-  cz: 0,
-  size: 120,
-  count: 28,
-  tile: "tiles/boxel-sol.json",
-});
-cells.push({
-  id: "boxel-colonia",
-  cx: COLONIA.x,
-  cy: COLONIA.y,
-  cz: COLONIA.z,
-  size: 200,
-  count: 18,
-  tile: "tiles/boxel-colonia.json",
-});
-cells.push({
-  id: "boxel-core",
-  cx: SGR.x,
-  cy: SGR.y,
-  cz: SGR.z,
-  size: 500,
-  count: 70,
-  tile: "tiles/boxel-core.json",
-});
+cells.push(
+  forgeCell("boxel-sol", { x: 0, y: 0, z: 0 }, 80, 28, "tiles/boxel-sol.json"),
+);
+cells.push(forgeCell("boxel-colonia", COLONIA, 160, 18, "tiles/boxel-colonia.json"));
+cells.push(forgeCell("boxel-core", SGR, 640, 70, "tiles/boxel-core.json"));
 
 function scatterSystems(origin, count, radius, named) {
   const systems = [];
@@ -158,18 +157,5 @@ writeFileSync(
     "Sagittarius A*": { ...SGR, tile: "boxel-core" },
   }),
 );
-writeFileSync(
-  join(dir, "routes.json"),
-  JSON.stringify({
-    routes: [
-      {
-        name: "Sol to Colonia",
-        points: [
-          { x: 0, y: 0, z: 0 },
-          { x: COLONIA.x, y: COLONIA.y, z: COLONIA.z },
-        ],
-      },
-    ],
-  }),
-);
+writeFileSync(join(dir, "routes.json"), JSON.stringify({ routes: [] }));
 console.log(`cells ${cells.length}`);
