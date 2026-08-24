@@ -41,7 +41,57 @@ function impostorOrbs(
   return out;
 }
 
-// Camera-facing 2D orbs (gl_PointCoord). Not SphereGeometry — those spin with the camera.
+// Painted 2D ball image. Camera-facing sprite; highlight is baked so it never spins.
+function makeOrbTexture(): THREE.CanvasTexture {
+  const s = 256;
+  const cnv = document.createElement("canvas");
+  cnv.width = cnv.height = s;
+  const ctx = cnv.getContext("2d");
+  const tex = new THREE.CanvasTexture(cnv);
+  tex.flipY = false;
+  tex.needsUpdate = true;
+  if (!ctx) return tex;
+  const cx = s * 0.5;
+  const cy = s * 0.5;
+  const r = s * 0.48;
+  const body = ctx.createRadialGradient(
+    cx - r * 0.32,
+    cy - r * 0.36,
+    r * 0.04,
+    cx,
+    cy,
+    r,
+  );
+  body.addColorStop(0, "rgb(255,255,255)");
+  body.addColorStop(0.2, "rgb(240,240,240)");
+  body.addColorStop(0.48, "rgb(158,158,158)");
+  body.addColorStop(0.78, "rgb(58,58,58)");
+  body.addColorStop(0.94, "rgb(18,18,18)");
+  body.addColorStop(1, "rgba(8,8,8,0)");
+  ctx.fillStyle = body;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fill();
+  const spec = ctx.createRadialGradient(
+    cx - r * 0.28,
+    cy - r * 0.34,
+    0,
+    cx - r * 0.28,
+    cy - r * 0.34,
+    r * 0.4,
+  );
+  spec.addColorStop(0, "rgba(255,255,255,0.95)");
+  spec.addColorStop(0.22, "rgba(255,255,255,0.35)");
+  spec.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.globalCompositeOperation = "lighter";
+  ctx.fillStyle = spec;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fill();
+  tex.needsUpdate = true;
+  return tex;
+}
+
 const orbVert = `
 attribute float aScale;
 uniform float uPixelRatio;
@@ -57,24 +107,19 @@ void main() {
 `;
 
 const orbFrag = `
+uniform sampler2D uMap;
 varying vec3 vColor;
 void main() {
-  vec2 uv = gl_PointCoord - vec2(0.5);
-  float d = length(uv);
-  if (d > 0.5) discard;
-  float core = smoothstep(0.48, 0.08, d);
-  vec2 hi = uv - vec2(-0.12, 0.16);
-  float spark = smoothstep(0.22, 0.0, length(hi)) * 0.55;
-  vec3 col = vColor * core + vec3(1.0) * spark;
-  float alpha = pow(core, 0.85);
-  gl_FragColor = vec4(col, alpha);
+  vec4 tex = texture2D(uMap, gl_PointCoord);
+  if (tex.a < 0.06) discard;
+  gl_FragColor = vec4(vColor * tex.rgb, tex.a);
 }
 `;
 
 function orbCloud(
   items: { x: number; y: number; z: number; r: number }[],
   color: THREE.Color,
-  maxPx: number,
+  opts: { maxPx: number; map: THREE.Texture; additive?: boolean },
 ): THREE.Points {
   const pos = new Float32Array(items.length * 3);
   const scale = new Float32Array(items.length);
@@ -99,12 +144,14 @@ function orbCloud(
     fragmentShader: orbFrag,
     uniforms: {
       uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
-      uMaxSize: { value: maxPx },
+      uMaxSize: { value: opts.maxPx },
+      uMap: { value: opts.map },
     },
     transparent: true,
-    depthWrite: false,
-    blending: THREE.AdditiveBlending,
+    depthWrite: !opts.additive,
+    blending: opts.additive ? THREE.AdditiveBlending : THREE.NormalBlending,
     vertexColors: true,
+    fog: false,
   });
   const pts = new THREE.Points(geo, mat);
   pts.frustumCulled = false;
@@ -183,6 +230,8 @@ export async function attachScene(
     );
   });
 
+  const orbMap = makeOrbTexture();
+
   let impostors: THREE.Points | undefined;
   let orbs: THREE.Points | undefined;
   let lines: THREE.LineSegments | undefined;
@@ -208,7 +257,11 @@ export async function attachScene(
     if (!state.hideImpostors) {
       const balls = impostorOrbs(state.cells, state.loadedCellIds);
       if (balls.length) {
-        impostors = orbCloud(balls, new THREE.Color(0x9bb6ff), 56);
+        impostors = orbCloud(balls, new THREE.Color(0x9bb6ff), {
+          maxPx: 56,
+          map: orbMap,
+          additive: true,
+        });
         scene.add(impostors);
       }
     }
@@ -226,7 +279,7 @@ export async function attachScene(
               : 480,
         })),
         new THREE.Color(0xffe29a),
-        220,
+        { maxPx: 220, map: orbMap },
       );
       scene.add(orbs);
     }
@@ -324,6 +377,7 @@ export async function attachScene(
       disposeMesh(impostors, scene);
       disposeMesh(orbs, scene);
       disposeMesh(lines, scene);
+      orbMap.dispose();
       renderer.dispose();
       canvas.remove();
     },
