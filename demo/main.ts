@@ -1,5 +1,11 @@
 import { ED3DM } from "../src/index";
-import type { ColorByMode, Ed3dmMap, LodSetting, System } from "../src/index";
+import type {
+  ColorByMode,
+  Ed3dmMap,
+  LodSetting,
+  System,
+  VisualTheme,
+} from "../src/index";
 
 const panel = document.querySelector("#panel") as HTMLElement;
 const search = document.querySelector("#search") as HTMLInputElement;
@@ -67,3 +73,16 @@ filter.addEventListener("change", () => {
 });
 grid.addEventListener("change", () => map.setGrid(grid.checked));
 backdrop.addEventListener("change", () => map.setBackdrop(backdrop.checked));
+map.setGrid(grid.checked);
+map.setBackdrop(backdrop.checked);
+
+document.querySelectorAll<HTMLButtonElement>("#theme-picker button").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const next = btn.dataset.theme as VisualTheme;
+    map.setTheme(next);
+    document.documentElement.dataset.theme = next;
+    document.querySelectorAll<HTMLButtonElement>("#theme-picker button").forEach((b) => {
+      b.setAttribute("aria-pressed", String(b === btn));
+    });
+  });
+});

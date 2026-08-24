@@ -57,7 +57,7 @@ describe("color-by and Category filters", () => {
     expect(colorFor({ primary_economy: "Refinery" }, "economy")).toBe("#ff7f00");
     expect(colorFor({ allegiance: "Federation" }, "allegiance")).toBe("#fe0000");
     expect(colorFor({ government: "Democracy" }, "government")).toBe("#7fff00");
-    expect(colorFor({ primary_economy: "Refinery" }, "none")).toBe("#ffe29a");
+    expect(colorFor({ primary_economy: "Refinery" }, "none")).toBe("#2e2e2c");
   });
 
   it("setFilter hides Systems whose Category is off", async () => {
@@ -83,6 +83,17 @@ describe("color-by and Category filters", () => {
     map.setColorBy("economy");
     expect(map.orbColor("Sol")).toBe("#ff7f00");
     expect(map.visibleSystems().map((s) => s.name)).toEqual(["Sol"]);
+  });
+
+  it("setTheme accepts paper, charcoal, and realistic", async () => {
+    const map = await ED3DM.create({
+      container: document.body,
+      catalog: { overviewUrl: "/catalog/overview.json" },
+    });
+    map.setTheme("charcoal");
+    map.setTheme("realistic");
+    map.setTheme("paper");
+    expect(map.orbColor("missing")).toBeUndefined();
   });
 
   it("destroy drops loaded tiles", async () => {

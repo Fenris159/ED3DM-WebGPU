@@ -45,6 +45,8 @@ export type ColorByMode =
   | "government"
   | "none";
 
+export type VisualTheme = "paper" | "charcoal" | "realistic";
+
 export type CatalogOptions = {
   overviewUrl: string;
   tileBaseUrl?: string;

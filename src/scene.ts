@@ -1,7 +1,25 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { orbScale } from "./palettes";
-import type { CatalogCell, Route, System } from "./types";
+import {
+  CSS2DObject,
+  CSS2DRenderer,
+} from "three/examples/jsm/renderers/CSS2DRenderer.js";
+import { orbScale, spectralColor } from "./palettes";
+import { GALACTIC_REGIONS, GALAXY_CORE, GALAXY_RADIUS } from "./regions";
+import type { CatalogCell, Route, System, VisualTheme } from "./types";
+
+const PAPER = 0xeaeae8;
+const CHARCOAL = 0x1c1c1b;
+const SPACE = 0x07060c;
+const SPECTRAL = [
+  "#9bb0ff",
+  "#c5d4ff",
+  "#f4f1ff",
+  "#fff4ea",
+  "#ffd27a",
+  "#ff9a4a",
+  "#ff6848",
+];
 
 export type SceneHandle = {
   sync: (state: {
@@ -14,9 +32,11 @@ export type SceneHandle = {
     routes?: Route[];
     grid?: boolean;
     backdrop?: boolean;
+    theme?: VisualTheme;
   }) => void;
   flyCamera: (target: { x: number; y: number; z: number }) => void;
   flyGalaxy: () => void;
+  setTheme: (theme: VisualTheme) => void;
   destroy: () => void;
 };
 
@@ -25,29 +45,32 @@ function hash01(i: number, seed: number): number {
   return n - Math.floor(n);
 }
 
+const PAPER_GRAYS = ["#1c1c1b", "#2e2e2c", "#4a4a46", "#6a6a64", "#8a8a84"];
+
 function impostorOrbs(
   cells: CatalogCell[],
   skipIds?: Set<string>,
-): { x: number; y: number; z: number; r: number }[] {
-  const out: { x: number; y: number; z: number; r: number }[] = [];
+): { x: number; y: number; z: number; r: number; hex: string }[] {
+  const out: { x: number; y: number; z: number; r: number; hex: string }[] = [];
   for (const cell of cells) {
     if (skipIds?.has(cell.id)) continue;
-    const n = Math.min(cell.count, 10);
+    const n = Math.min(cell.count, 30);
     const seed = cell.id.length + cell.cx + cell.cz;
-    const r = Math.min(1200, Math.max(360, cell.size * 0.55));
+    const r = Math.min(400, Math.max(120, cell.size * 0.18));
     for (let i = 0; i < n; i++) {
       out.push({
         x: cell.cx + (hash01(i, seed) - 0.5) * cell.size,
         y: cell.cy + (hash01(i + 17, seed) - 0.5) * cell.size * 0.12,
         z: cell.cz + (hash01(i + 31, seed) - 0.5) * cell.size,
         r,
+        hex: PAPER_GRAYS[Math.floor(hash01(i, seed + 7) * PAPER_GRAYS.length)]!,
       });
     }
   }
   return out;
 }
 
-// Flat 2D disc sprite (same trick as the reference app / ED3D). Not a Lambert sphere.
+// Solid camera-facing disc (dictionary nodes). Not a shaded sphere, not a glow.
 function makeOrbTexture(): THREE.CanvasTexture {
   const s = 128;
   const cnv = document.createElement("canvas");
@@ -59,26 +82,29 @@ function makeOrbTexture(): THREE.CanvasTexture {
   if (!ctx) return tex;
   const cx = s * 0.5;
   const cy = s * 0.5;
-  const r = s * 0.5;
-  const disc = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-  disc.addColorStop(0, "rgba(255,255,255,1)");
-  disc.addColorStop(0.35, "rgba(255,255,255,0.95)");
-  disc.addColorStop(0.65, "rgba(255,255,255,0.4)");
-  disc.addColorStop(1, "rgba(255,255,255,0)");
-  ctx.fillStyle = disc;
-  ctx.fillRect(0, 0, s, s);
-  const glint = ctx.createRadialGradient(
-    cx - r * 0.16,
-    cy - r * 0.16,
-    0,
-    cx - r * 0.16,
-    cy - r * 0.16,
-    r * 0.28,
-  );
-  glint.addColorStop(0, "rgba(255,255,255,0.55)");
-  glint.addColorStop(1, "rgba(255,255,255,0)");
-  ctx.globalCompositeOperation = "lighter";
-  ctx.fillStyle = glint;
+  const r = s * 0.48;
+  ctx.clearRect(0, 0, s, s);
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fillStyle = "#ffffff";
+  ctx.fill();
+  tex.needsUpdate = true;
+  return tex;
+}
+
+function makeNebulaTexture(): THREE.CanvasTexture {
+  const s = 128;
+  const cnv = document.createElement("canvas");
+  cnv.width = cnv.height = s;
+  const ctx = cnv.getContext("2d");
+  const tex = new THREE.CanvasTexture(cnv);
+  tex.flipY = false;
+  if (!ctx) return tex;
+  const g = ctx.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+  g.addColorStop(0, "rgba(255,255,255,0.55)");
+  g.addColorStop(0.35, "rgba(255,255,255,0.18)");
+  g.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = g;
   ctx.fillRect(0, 0, s, s);
   tex.needsUpdate = true;
   return tex;
@@ -89,10 +115,12 @@ attribute float aScale;
 uniform float uPixelRatio;
 uniform float uMaxSize;
 varying vec3 vColor;
+varying float vDepth;
 void main() {
   vColor = color;
   vec4 mv = modelViewMatrix * vec4(position, 1.0);
   gl_Position = projectionMatrix * mv;
+  vDepth = max(0.0, -mv.z);
   float dist = max(2.0, -mv.z);
   gl_PointSize = clamp(aScale * 280.0 / dist * uPixelRatio, 2.0, uMaxSize);
 }
@@ -100,18 +128,29 @@ void main() {
 
 const orbFrag = `
 uniform sampler2D uMap;
+uniform vec3 uFogColor;
+uniform float uFogNear;
+uniform float uFogFar;
 varying vec3 vColor;
+varying float vDepth;
 void main() {
   vec4 tex = texture2D(uMap, gl_PointCoord);
-  if (tex.a < 0.06) discard;
-  gl_FragColor = vec4(vColor * tex.rgb, tex.a);
+  if (tex.a < 0.5) discard;
+  float fog = smoothstep(uFogNear, uFogFar, vDepth);
+  vec3 rgb = mix(vColor, uFogColor, fog);
+  gl_FragColor = vec4(rgb, 1.0);
 }
 `;
 
 function orbCloud(
   items: { x: number; y: number; z: number; r: number; hex?: string }[],
   color: THREE.Color,
-  opts: { maxPx: number; map: THREE.Texture },
+  opts: {
+    maxPx: number;
+    map: THREE.Texture;
+    additive?: boolean;
+    fogColor?: number;
+  },
 ): THREE.Points {
   const pos = new Float32Array(items.length * 3);
   const scale = new Float32Array(items.length);
@@ -141,10 +180,13 @@ function orbCloud(
       uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
       uMaxSize: { value: opts.maxPx },
       uMap: { value: opts.map },
+      uFogColor: { value: new THREE.Color(opts.fogColor ?? PAPER) },
+      uFogNear: { value: 8000 },
+      uFogFar: { value: 72000 },
     },
-    transparent: true,
-    depthWrite: false,
-    blending: THREE.AdditiveBlending,
+    transparent: Boolean(opts.additive),
+    depthWrite: !opts.additive,
+    blending: opts.additive ? THREE.AdditiveBlending : THREE.NormalBlending,
     vertexColors: true,
     fog: false,
   });
@@ -182,12 +224,12 @@ export async function attachScene(
   canvas.style.display = "block";
   canvas.style.width = "100%";
   canvas.style.height = "100%";
+  canvas.style.cursor = "pointer";
   container.style.position = container.style.position || "relative";
   container.appendChild(canvas);
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x05040a);
-  scene.fog = new THREE.FogExp2(0x05040a, 0.000018);
+  scene.background = new THREE.Color(PAPER);
 
   const camera = new THREE.PerspectiveCamera(
     50,
@@ -195,7 +237,7 @@ export async function attachScene(
     0.5,
     250000,
   );
-  camera.position.set(-4000, 14000, -6000);
+  camera.position.set(GALAXY_CORE.x - 8000, 22000, GALAXY_CORE.z - 18000);
 
   const renderer = new THREE.WebGLRenderer({
     canvas,
@@ -203,7 +245,15 @@ export async function attachScene(
     alpha: false,
   });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setClearColor(PAPER, 1);
   renderer.setSize(container.clientWidth || 800, container.clientHeight || 600);
+
+  const labelRenderer = new CSS2DRenderer();
+  labelRenderer.setSize(container.clientWidth || 800, container.clientHeight || 600);
+  labelRenderer.domElement.style.position = "absolute";
+  labelRenderer.domElement.style.inset = "0";
+  labelRenderer.domElement.style.pointerEvents = "none";
+  container.appendChild(labelRenderer.domElement);
 
   const controls = new OrbitControls(camera, canvas);
   controls.enableDamping = true;
@@ -211,9 +261,9 @@ export async function attachScene(
   controls.rotateSpeed = 0.3;
   controls.zoomSpeed = 2.2;
   controls.panSpeed = 4;
-  controls.maxDistance = 90000;
+  controls.maxDistance = 120000;
   controls.minDistance = 4;
-  controls.target.set(0, 0, 16000);
+  controls.target.set(GALAXY_CORE.x, 0, GALAXY_CORE.z);
   controls.addEventListener("end", () => {
     handlers.onViewIdle?.(
       {
@@ -226,26 +276,47 @@ export async function attachScene(
   });
 
   const orbMap = makeOrbTexture();
+  const nebulaMap = makeNebulaTexture();
 
   let impostors: THREE.Points | undefined;
   let orbs: THREE.Points | undefined;
   let lines: THREE.LineSegments | undefined;
   let routesLine: THREE.LineSegments | undefined;
-  let backdrop: THREE.Points | undefined;
+  let nebula: THREE.Points | undefined;
   let systems: System[] = [];
-  let showGrid = false;
-  let showBackdrop = false;
+  let showGrid = true;
+  let showBackdrop = true;
+  let theme: VisualTheme = "paper";
+  let lastSync:
+    | {
+        cells: CatalogCell[];
+        systems: System[];
+        colors?: string[];
+        selected?: System;
+        hideImpostors?: boolean;
+        loadedCellIds?: Set<string>;
+        routes?: Route[];
+        grid?: boolean;
+        backdrop?: boolean;
+        theme?: VisualTheme;
+      }
+    | undefined;
 
-  const grid = new THREE.GridHelper(40000, 40, 0x1b3355, 0x122033);
-  grid.visible = false;
+  const gridSpan = GALAXY_RADIUS * 2 + 4000;
+  const grid = new THREE.GridHelper(gridSpan, 44, 0xc8c8c2, 0xdddcd6);
+  grid.position.set(GALAXY_CORE.x, 0, GALAXY_CORE.z);
+  grid.visible = true;
   scene.add(grid);
 
-  const ringGeo = new THREE.RingGeometry(1.1, 1.35, 48);
+  const labelGroup = new THREE.Group();
+  scene.add(labelGroup);
+
+  const ringGeo = new THREE.RingGeometry(1.15, 1.4, 64);
   const ringMat = new THREE.MeshBasicMaterial({
-    color: 0x7cff9a,
+    color: 0x1a1a19,
     side: THREE.DoubleSide,
     transparent: true,
-    opacity: 0.9,
+    opacity: 0.85,
     depthWrite: false,
   });
   const ring = new THREE.Mesh(ringGeo, ringMat);
@@ -254,27 +325,60 @@ export async function attachScene(
 
   const raycaster = new THREE.Raycaster();
 
-  function ensureBackdrop() {
-    if (backdrop) return;
-    const n = 1800;
-    const items: { x: number; y: number; z: number; r: number }[] = [];
+  function nebulaHex(i: number, visual: VisualTheme): string {
+    if (visual === "paper") {
+      return ["#d2cec6", "#c8c4bc", "#ddd8d0"][i % 3]!;
+    }
+    if (visual === "charcoal") {
+      return ["#3a3a42", "#2e3340", "#403838"][i % 3]!;
+    }
+    return ["#5a3a58", "#2a4060", "#4a3828", "#3a2a48"][i % 4]!;
+  }
+
+  function ensureNebula(visual: VisualTheme) {
+    disposeMesh(nebula, scene);
+    nebula = undefined;
+    const n = 900;
+    const items: { x: number; y: number; z: number; r: number; hex: string }[] =
+      [];
     for (let i = 0; i < n; i++) {
-      const u = hash01(i, 9);
-      const v = hash01(i, 3);
-      const r = Math.sqrt(u) * 28000;
-      const th = v * Math.PI * 2;
+      const u = hash01(i, 19);
+      const v = hash01(i, 5);
+      const r = Math.pow(u, 0.65) * (GALAXY_RADIUS * 0.92);
+      const th = v * Math.PI * 2 + r / 3400;
       items.push({
-        x: Math.cos(th) * r + 25,
-        y: (hash01(i, 11) - 0.5) * 600,
-        z: Math.sin(th) * r + 16000,
-        r: 900,
+        x: GALAXY_CORE.x + Math.cos(th) * r,
+        y: (hash01(i, 13) - 0.5) * 900,
+        z: GALAXY_CORE.z + Math.sin(th) * r,
+        r: 2200 + hash01(i, 8) * 2800,
+        hex: nebulaHex(i, visual),
       });
     }
-    backdrop = orbCloud(items, new THREE.Color(0x334466), {
-      maxPx: 18,
-      map: orbMap,
+    nebula = orbCloud(items, new THREE.Color(0x888888), {
+      maxPx: visual === "paper" ? 48 : 90,
+      map: nebulaMap,
+      additive: visual !== "paper",
+      fogColor: visual === "paper" ? PAPER : visual === "charcoal" ? CHARCOAL : SPACE,
     });
-    scene.add(backdrop);
+    scene.add(nebula);
+  }
+
+  function applyTheme(visual: VisualTheme) {
+    theme = visual;
+    const bg = visual === "paper" ? PAPER : visual === "charcoal" ? CHARCOAL : SPACE;
+    scene.background = new THREE.Color(bg);
+    renderer.setClearColor(bg, 1);
+    const major = visual === "paper" ? 0xb8b8b2 : 0x3a3a38;
+    const minor = visual === "paper" ? 0xd8d8d2 : 0x2a2a28;
+    grid.material = Array.isArray(grid.material)
+      ? grid.material
+      : grid.material;
+    const mats = Array.isArray(grid.material) ? grid.material : [grid.material];
+    mats.forEach((m, i) => {
+      if ("color" in m) (m as THREE.LineBasicMaterial).color.set(i === 0 ? major : minor);
+    });
+    ringMat.color.set(visual === "paper" ? 0x1a1a19 : 0xe8e8e2);
+    container.dataset.theme = visual;
   }
 
   function sync(state: {
@@ -287,13 +391,16 @@ export async function attachScene(
     routes?: Route[];
     grid?: boolean;
     backdrop?: boolean;
+    theme?: VisualTheme;
   }) {
+    lastSync = state;
     systems = state.systems;
-    showGrid = Boolean(state.grid);
-    showBackdrop = Boolean(state.backdrop);
+    showGrid = state.grid !== false;
+    showBackdrop = state.backdrop !== false;
+    if (state.theme && state.theme !== theme) applyTheme(state.theme);
     grid.visible = showGrid;
-    if (showBackdrop) ensureBackdrop();
-    if (backdrop) backdrop.visible = showBackdrop;
+    if (showBackdrop && !nebula) ensureNebula(theme);
+    if (nebula) nebula.visible = showBackdrop;
 
     disposeMesh(impostors, scene);
     disposeMesh(orbs, scene);
@@ -303,13 +410,30 @@ export async function attachScene(
     orbs = undefined;
     lines = undefined;
     routesLine = undefined;
+    while (labelGroup.children.length) {
+      const child = labelGroup.children[0] as CSS2DObject;
+      child.element.remove();
+      labelGroup.remove(child);
+    }
 
+    const fogColor = theme === "paper" ? PAPER : theme === "charcoal" ? CHARCOAL : SPACE;
+    const additive = theme !== "paper";
     if (!state.hideImpostors) {
-      const balls = impostorOrbs(state.cells, state.loadedCellIds);
+      const balls = impostorOrbs(state.cells, state.loadedCellIds).map((p, i) => ({
+        ...p,
+        hex:
+          theme === "realistic"
+            ? SPECTRAL[i % SPECTRAL.length]!
+            : theme === "charcoal"
+              ? ["#d8d4cc", "#c4c0b8", "#eeeae2", "#a8a49c"][i % 4]!
+              : p.hex,
+      }));
       if (balls.length) {
-        impostors = orbCloud(balls, new THREE.Color(0x9bb6ff), {
-          maxPx: 56,
+        impostors = orbCloud(balls, new THREE.Color(0x4a4a46), {
+          maxPx: 12,
           map: orbMap,
+          additive,
+          fogColor,
         });
         scene.add(impostors);
       }
@@ -323,10 +447,18 @@ export async function attachScene(
           r: orbScale(s.population),
           hex: state.colors?.[i],
         })),
-        new THREE.Color(0xffe29a),
-        { maxPx: 220, map: orbMap },
+        new THREE.Color(0x2e2e2c),
+        { maxPx: 55, map: orbMap, additive, fogColor },
       );
       scene.add(orbs);
+    }
+    for (const region of GALACTIC_REGIONS) {
+      const el = document.createElement("div");
+      el.className = "region-label";
+      el.textContent = region.name.toUpperCase();
+      const tag = new CSS2DObject(el);
+      tag.position.set(region.coords.x, region.coords.y, region.coords.z);
+      labelGroup.add(tag);
     }
     ring.visible = Boolean(state.selected);
     if (state.selected) {
@@ -354,9 +486,9 @@ export async function attachScene(
         routesLine = new THREE.LineSegments(
           geo,
           new THREE.LineBasicMaterial({
-            color: 0xffb347,
+            color: 0xb0b0aa,
             transparent: true,
-            opacity: 0.55,
+            opacity: 0.4,
           }),
         );
         scene.add(routesLine);
@@ -396,9 +528,9 @@ export async function attachScene(
         lines = new THREE.LineSegments(
           geo,
           new THREE.LineBasicMaterial({
-            color: 0x7ec8ff,
+            color: 0x9a9a94,
             transparent: true,
-            opacity: 0.7,
+            opacity: 0.45,
           }),
         );
         scene.add(lines);
@@ -432,6 +564,7 @@ export async function attachScene(
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
     renderer.setSize(w, h);
+    labelRenderer.setSize(w, h);
   }
   window.addEventListener("resize", onResize);
 
@@ -451,8 +584,10 @@ export async function attachScene(
     controls.update();
     if (ring.visible) ring.lookAt(camera.position);
     const d = controls.getDistance();
-    ring.scale.setScalar(Math.max(2, Math.min(40, d * 0.04)));
+    ring.scale.setScalar(Math.max(1.2, Math.min(18, d * 0.018)));
+    labelGroup.visible = d > 6000;
     renderer.render(scene, camera);
+    labelRenderer.render(scene, camera);
   }
   loop();
 
@@ -463,8 +598,14 @@ export async function attachScene(
       camera.position.set(target.x + 22, target.y + 14, target.z + 52);
     },
     flyGalaxy() {
-      controls.target.set(0, 0, 16000);
-      camera.position.set(-4000, 14000, -6000);
+      controls.target.set(GALAXY_CORE.x, 0, GALAXY_CORE.z);
+      camera.position.set(GALAXY_CORE.x - 8000, 22000, GALAXY_CORE.z - 18000);
+    },
+    setTheme(next) {
+      applyTheme(next);
+      disposeMesh(nebula, scene);
+      nebula = undefined;
+      if (lastSync) sync({ ...lastSync, theme: next });
     },
     destroy() {
       cancelAnimationFrame(raf);
@@ -476,13 +617,21 @@ export async function attachScene(
       disposeMesh(orbs, scene);
       disposeMesh(lines, scene);
       disposeMesh(routesLine, scene);
-      disposeMesh(backdrop, scene);
+      disposeMesh(nebula, scene);
+      nebulaMap.dispose();
+      while (labelGroup.children.length) {
+        const child = labelGroup.children[0] as CSS2DObject;
+        child.element.remove();
+        labelGroup.remove(child);
+      }
+      scene.remove(labelGroup);
       scene.remove(grid);
       scene.remove(ring);
       ringGeo.dispose();
       ringMat.dispose();
       orbMap.dispose();
       renderer.dispose();
+      labelRenderer.domElement.remove();
       canvas.remove();
     },
   };

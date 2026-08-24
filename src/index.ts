@@ -7,11 +7,18 @@ import type {
   Route,
   System,
   TileFile,
+  VisualTheme,
 } from "./types";
-import { colorFor } from "./palettes";
+import { colorFor, spectralColor } from "./palettes";
 import { attachScene, type SceneHandle } from "./scene";
 
-export type { ColorByMode, CreateOptions, LodSetting, System } from "./types";
+export type {
+  ColorByMode,
+  CreateOptions,
+  LodSetting,
+  System,
+  VisualTheme,
+} from "./types";
 export { colorFor } from "./palettes";
 
 export type Ed3dmMap = {
@@ -22,6 +29,7 @@ export type Ed3dmMap = {
   setColorBy: (mode: ColorByMode) => void;
   setGrid: (on: boolean) => void;
   setBackdrop: (on: boolean) => void;
+  setTheme: (theme: VisualTheme) => void;
   clearSelection: () => void;
   destroy: () => void;
   loadedTiles: () => string[];
@@ -67,8 +75,9 @@ export const ED3DM = {
     let selected: System | undefined;
     let colorBy: ColorByMode = "none";
     let categoryFilter: string[] | undefined;
-    let showGrid = false;
-    let showBackdrop = false;
+    let showGrid = true;
+    let showBackdrop = true;
+    let theme: VisualTheme = "paper";
     let routes: Route[] = [];
     let searchIndex: Record<string, { x: number; y: number; z: number; tile?: string }> | null =
       null;
@@ -191,13 +200,18 @@ export const ED3DM = {
       scene?.sync({
         cells,
         systems: shown,
-        colors: shown.map((s) => colorFor(s, colorBy)),
+        colors: shown.map((s) =>
+          theme === "realistic" && colorBy === "none"
+            ? spectralColor(s.name)
+            : colorFor(s, colorBy),
+        ),
         selected,
         hideImpostors: lod === "all",
         loadedCellIds,
         routes,
         grid: showGrid,
         backdrop: showBackdrop,
+        theme,
       });
     }
 
@@ -254,6 +268,11 @@ export const ED3DM = {
       },
       setBackdrop(on) {
         showBackdrop = on;
+        paint();
+      },
+      setTheme(next) {
+        theme = next;
+        scene?.setTheme(next);
         paint();
       },
       clearSelection() {

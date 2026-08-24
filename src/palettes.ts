@@ -73,7 +73,27 @@ export type ColorByMode =
   | "government"
   | "none";
 
-const DEFAULT_ORB = "#ffe29a";
+const DEFAULT_ORB = "#2e2e2c";
+const GRAYS = ["#1c1c1b", "#2e2e2c", "#4a4a46", "#6a6a64", "#8a8a84"] as const;
+const SPECTRAL = [
+  "#9bb0ff",
+  "#c5d4ff",
+  "#f4f1ff",
+  "#fff4ea",
+  "#ffd27a",
+  "#ff9a4a",
+  "#ff6848",
+] as const;
+
+function hashName(name: string): number {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
+
+export function spectralColor(name: string): string {
+  return SPECTRAL[hashName(name) % SPECTRAL.length] ?? SPECTRAL[4];
+}
 
 function indexColor(list: readonly string[], value: string | undefined): string {
   if (!value) return colorPalette[0];
@@ -92,6 +112,7 @@ function hashCat(cat: string): string {
 
 export function colorFor(
   system: {
+    name?: string;
     primary_economy?: string;
     allegiance?: string;
     government?: string;
@@ -99,7 +120,10 @@ export function colorFor(
   },
   mode: ColorByMode,
 ): string {
-  if (mode === "none") return DEFAULT_ORB;
+  if (mode === "none") {
+    if (!system.name) return DEFAULT_ORB;
+    return GRAYS[hashName(system.name) % GRAYS.length] ?? DEFAULT_ORB;
+  }
   if (mode === "economy") return indexColor(mapEconomy, system.primary_economy);
   if (mode === "allegiance") return indexColor(mapAllegiance, system.allegiance);
   if (mode === "government") return indexColor(mapGovernment, system.government);
@@ -110,6 +134,6 @@ export function colorFor(
 
 export function orbScale(population: number | undefined): number {
   const POP = 1_000_000_000;
-  if (!population || population <= 0) return 400;
-  return Math.min(1100, 50 * Math.max(population / POP, 1) * 8);
+  if (!population || population <= 0) return 130;
+  return Math.min(360, 50 * Math.max(population / POP, 1) * 2.6);
 }

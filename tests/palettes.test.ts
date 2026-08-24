@@ -8,9 +8,9 @@ describe("reference palettes", () => {
   });
 
   it("scales inhabited Systems from population", () => {
-    expect(orbScale(undefined)).toBe(400);
-    expect(orbScale(0)).toBe(400);
+    expect(orbScale(undefined)).toBe(130);
+    expect(orbScale(0)).toBe(130);
     expect(orbScale(22_780_959_567)).toBeGreaterThan(orbScale(1_000_000_000));
-    expect(orbScale(22_780_959_567)).toBeLessThanOrEqual(1100);
+    expect(orbScale(22_780_959_567)).toBeLessThanOrEqual(360);
   });
 });
