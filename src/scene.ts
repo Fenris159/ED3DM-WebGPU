@@ -41,9 +41,9 @@ function impostorOrbs(
   return out;
 }
 
-// Painted 2D ball image. Camera-facing sprite; highlight is baked so it never spins.
+// Flat 2D disc sprite (same trick as the reference app / ED3D). Not a Lambert sphere.
 function makeOrbTexture(): THREE.CanvasTexture {
-  const s = 256;
+  const s = 128;
   const cnv = document.createElement("canvas");
   cnv.width = cnv.height = s;
   const ctx = cnv.getContext("2d");
@@ -53,41 +53,27 @@ function makeOrbTexture(): THREE.CanvasTexture {
   if (!ctx) return tex;
   const cx = s * 0.5;
   const cy = s * 0.5;
-  const r = s * 0.48;
-  const body = ctx.createRadialGradient(
-    cx - r * 0.32,
-    cy - r * 0.36,
-    r * 0.04,
-    cx,
-    cy,
-    r,
-  );
-  body.addColorStop(0, "rgb(255,255,255)");
-  body.addColorStop(0.2, "rgb(240,240,240)");
-  body.addColorStop(0.48, "rgb(158,158,158)");
-  body.addColorStop(0.78, "rgb(58,58,58)");
-  body.addColorStop(0.94, "rgb(18,18,18)");
-  body.addColorStop(1, "rgba(8,8,8,0)");
-  ctx.fillStyle = body;
-  ctx.beginPath();
-  ctx.arc(cx, cy, r, 0, Math.PI * 2);
-  ctx.fill();
-  const spec = ctx.createRadialGradient(
-    cx - r * 0.28,
-    cy - r * 0.34,
+  const r = s * 0.5;
+  const disc = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+  disc.addColorStop(0, "rgba(255,255,255,1)");
+  disc.addColorStop(0.35, "rgba(255,255,255,0.95)");
+  disc.addColorStop(0.65, "rgba(255,255,255,0.4)");
+  disc.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = disc;
+  ctx.fillRect(0, 0, s, s);
+  const glint = ctx.createRadialGradient(
+    cx - r * 0.16,
+    cy - r * 0.16,
     0,
-    cx - r * 0.28,
-    cy - r * 0.34,
-    r * 0.4,
+    cx - r * 0.16,
+    cy - r * 0.16,
+    r * 0.28,
   );
-  spec.addColorStop(0, "rgba(255,255,255,0.95)");
-  spec.addColorStop(0.22, "rgba(255,255,255,0.35)");
-  spec.addColorStop(1, "rgba(255,255,255,0)");
+  glint.addColorStop(0, "rgba(255,255,255,0.55)");
+  glint.addColorStop(1, "rgba(255,255,255,0)");
   ctx.globalCompositeOperation = "lighter";
-  ctx.fillStyle = spec;
-  ctx.beginPath();
-  ctx.arc(cx, cy, r, 0, Math.PI * 2);
-  ctx.fill();
+  ctx.fillStyle = glint;
+  ctx.fillRect(0, 0, s, s);
   tex.needsUpdate = true;
   return tex;
 }
@@ -119,7 +105,7 @@ void main() {
 function orbCloud(
   items: { x: number; y: number; z: number; r: number }[],
   color: THREE.Color,
-  opts: { maxPx: number; map: THREE.Texture; additive?: boolean },
+  opts: { maxPx: number; map: THREE.Texture },
 ): THREE.Points {
   const pos = new Float32Array(items.length * 3);
   const scale = new Float32Array(items.length);
@@ -148,8 +134,8 @@ function orbCloud(
       uMap: { value: opts.map },
     },
     transparent: true,
-    depthWrite: !opts.additive,
-    blending: opts.additive ? THREE.AdditiveBlending : THREE.NormalBlending,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
     vertexColors: true,
     fog: false,
   });
@@ -260,7 +246,6 @@ export async function attachScene(
         impostors = orbCloud(balls, new THREE.Color(0x9bb6ff), {
           maxPx: 56,
           map: orbMap,
-          additive: true,
         });
         scene.add(impostors);
       }
