@@ -10,7 +10,7 @@ import { attachScene, type SceneHandle } from "./scene";
 
 export type { CreateOptions, LodSetting, System } from "./types";
 
-export type Ed3dMap = {
+export type Ed3dmMap = {
   setLod: (lod: LodSetting) => Promise<void>;
   focus: (coords: { x: number; y: number; z: number }) => Promise<void>;
   flyTo: (name: string) => Promise<System | undefined>;
@@ -47,7 +47,7 @@ async function loadJson<T>(url: string): Promise<T> {
 }
 
 export const ED3DM = {
-  async create(options: CreateOptions): Promise<Ed3dMap> {
+  async create(options: CreateOptions): Promise<Ed3dmMap> {
     const el = resolveContainer(options.container);
     const overview = await loadJson<DensityOverview>(
       options.catalog.overviewUrl,
@@ -85,12 +85,31 @@ export const ED3DM = {
       return Math.sqrt(dx * dx + dy * dy + dz * dz);
     }
 
+    function nearestCell(at: { x: number; y: number; z: number }): CatalogCell | undefined {
+      let best: CatalogCell | undefined;
+      let bestD = Infinity;
+      for (const cell of cells) {
+        if (!cell.tile) continue;
+        const d = dist(at, { x: cell.cx, y: cell.cy, z: cell.cz });
+        if (d < bestD) {
+          bestD = d;
+          best = cell;
+        }
+      }
+      return best;
+    }
+
     async function applyLod(): Promise<void> {
       if (lod === "all") {
         for (const cell of cells) await ensureTile(cell);
         return;
       }
-      if (lod === 0 || focusAt === undefined) return;
+      if (focusAt === undefined) return;
+      if (lod === 0) {
+        const cell = nearestCell(focusAt);
+        if (cell) await ensureTile(cell);
+        return;
+      }
       const radius = lod;
       for (const cell of cells) {
         if (dist(focusAt, { x: cell.cx, y: cell.cy, z: cell.cz }) <= radius) {
@@ -115,7 +134,7 @@ export const ED3DM = {
       });
     }
 
-    const map: Ed3dMap = {
+    const map: Ed3dmMap = {
       async setLod(next) {
         lod = next;
         await applyLod();
@@ -207,6 +226,9 @@ export const ED3DM = {
           },
           onPickCell(coords) {
             void map.focus(coords);
+          },
+          onViewIdle(coords, distance) {
+            if (distance < 8000) void map.focus(coords);
           },
         });
         paint();

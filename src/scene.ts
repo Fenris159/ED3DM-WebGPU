@@ -63,6 +63,7 @@ export async function attachScene(
   handlers: {
     onSelectSystem: (index: number) => void;
     onPickCell: (coords: { x: number; y: number; z: number }) => void;
+    onViewIdle?: (coords: { x: number; y: number; z: number }, distance: number) => void;
   },
 ): Promise<SceneHandle> {
   const canvas = document.createElement("canvas");
@@ -112,6 +113,16 @@ export async function attachScene(
   controls.maxDistance = 80000;
   controls.minDistance = 5;
   controls.target.set(0, 0, 8000);
+  controls.addEventListener("end", () => {
+    handlers.onViewIdle?.(
+      {
+        x: controls.target.x,
+        y: controls.target.y,
+        z: controls.target.z,
+      },
+      controls.getDistance(),
+    );
+  });
 
   let impostors: THREE.Points | undefined;
   let orbs: THREE.Points | undefined;

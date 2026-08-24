@@ -127,6 +127,16 @@ describe("LOD and search", () => {
     ]);
   });
 
+  it("focus at Sol with default LOD loads that cell's tile", async () => {
+    const map = await ED3DM.create({
+      container: document.body,
+      catalog: { overviewUrl: "/catalog/overview.json" },
+    });
+    fetched.length = 0;
+    await map.focus({ x: 0, y: 0, z: 0 });
+    expect(fetched).toEqual(["tiles/sol.json"]);
+  });
+
   it("focus at Sol with LOD 200 loads nearby tiles only", async () => {
     const map = await ED3DM.create({
       container: document.body,
