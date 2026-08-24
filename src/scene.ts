@@ -28,7 +28,7 @@ function impostorOrbs(
     if (skipIds?.has(cell.id)) continue;
     const n = Math.min(cell.count, 10);
     const seed = cell.id.length + cell.cx + cell.cz;
-    const r = Math.min(22, Math.max(5, cell.size * 0.018));
+    const r = Math.min(1200, Math.max(360, cell.size * 0.55));
     for (let i = 0; i < n; i++) {
       out.push({
         x: cell.cx + (hash01(i, seed) - 0.5) * cell.size,
@@ -41,36 +41,85 @@ function impostorOrbs(
   return out;
 }
 
-function instancedBalls(
+// Camera-facing 2D orbs (gl_PointCoord). Not SphereGeometry — those spin with the camera.
+const orbVert = `
+attribute float aScale;
+uniform float uPixelRatio;
+uniform float uMaxSize;
+varying vec3 vColor;
+void main() {
+  vColor = color;
+  vec4 mv = modelViewMatrix * vec4(position, 1.0);
+  gl_Position = projectionMatrix * mv;
+  float dist = max(2.0, -mv.z);
+  gl_PointSize = clamp(aScale * 280.0 / dist * uPixelRatio, 2.0, uMaxSize);
+}
+`;
+
+const orbFrag = `
+varying vec3 vColor;
+void main() {
+  vec2 uv = gl_PointCoord - vec2(0.5);
+  float d = length(uv);
+  if (d > 0.5) discard;
+  float core = smoothstep(0.48, 0.08, d);
+  vec2 hi = uv - vec2(-0.12, 0.16);
+  float spark = smoothstep(0.22, 0.0, length(hi)) * 0.55;
+  vec3 col = vColor * core + vec3(1.0) * spark;
+  float alpha = pow(core, 0.85);
+  gl_FragColor = vec4(col, alpha);
+}
+`;
+
+function orbCloud(
   items: { x: number; y: number; z: number; r: number }[],
-  color: number,
-  emissive: number,
-): THREE.InstancedMesh {
-  const geo = new THREE.SphereGeometry(1, 14, 10);
-  const mat = new THREE.MeshStandardMaterial({
-    color,
-    emissive,
-    emissiveIntensity: 0.35,
-    roughness: 0.45,
-    metalness: 0.05,
-  });
-  const mesh = new THREE.InstancedMesh(geo, mat, items.length);
-  const dummy = new THREE.Object3D();
+  color: THREE.Color,
+  maxPx: number,
+): THREE.Points {
+  const pos = new Float32Array(items.length * 3);
+  const scale = new Float32Array(items.length);
   items.forEach((p, i) => {
-    dummy.position.set(p.x, p.y, p.z);
-    dummy.scale.setScalar(p.r);
-    dummy.updateMatrix();
-    mesh.setMatrixAt(i, dummy.matrix);
+    pos[i * 3] = p.x;
+    pos[i * 3 + 1] = p.y;
+    pos[i * 3 + 2] = p.z;
+    scale[i] = p.r;
   });
-  mesh.instanceMatrix.needsUpdate = true;
-  return mesh;
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute("aScale", new THREE.BufferAttribute(scale, 1));
+  const cols = new Float32Array(items.length * 3);
+  for (let i = 0; i < items.length; i++) {
+    cols[i * 3] = color.r;
+    cols[i * 3 + 1] = color.g;
+    cols[i * 3 + 2] = color.b;
+  }
+  geo.setAttribute("color", new THREE.BufferAttribute(cols, 3));
+  const mat = new THREE.ShaderMaterial({
+    vertexShader: orbVert,
+    fragmentShader: orbFrag,
+    uniforms: {
+      uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
+      uMaxSize: { value: maxPx },
+    },
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    vertexColors: true,
+  });
+  const pts = new THREE.Points(geo, mat);
+  pts.frustumCulled = false;
+  return pts;
 }
 
 function disposeMesh(obj: THREE.Object3D | undefined, scene: THREE.Scene) {
   if (!obj) return;
   scene.remove(obj);
   obj.traverse((child) => {
-    if (child instanceof THREE.Mesh || child instanceof THREE.InstancedMesh || child instanceof THREE.LineSegments) {
+    if (
+      child instanceof THREE.Points ||
+      child instanceof THREE.LineSegments ||
+      child instanceof THREE.Mesh
+    ) {
       child.geometry.dispose();
       const mat = child.material;
       if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
@@ -106,27 +155,11 @@ export async function attachScene(
   );
   camera.position.set(-4000, 14000, -6000);
 
-  scene.add(new THREE.AmbientLight(0x8899cc, 0.55));
-  const key = new THREE.DirectionalLight(0xfff4e0, 1.35);
-  key.position.set(-12000, 18000, -8000);
-  scene.add(key);
-
-  let renderer: THREE.WebGLRenderer;
-  try {
-    const mod = await import("three/webgpu");
-    const gpu = new mod.WebGPURenderer({
-      canvas,
-      antialias: true,
-    });
-    await gpu.init();
-    renderer = gpu as unknown as THREE.WebGLRenderer;
-  } catch {
-    renderer = new THREE.WebGLRenderer({
-      canvas,
-      antialias: true,
-      alpha: false,
-    });
-  }
+  const renderer = new THREE.WebGLRenderer({
+    canvas,
+    antialias: true,
+    alpha: false,
+  });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(container.clientWidth || 800, container.clientHeight || 600);
 
@@ -150,8 +183,8 @@ export async function attachScene(
     );
   });
 
-  let impostors: THREE.InstancedMesh | undefined;
-  let orbs: THREE.InstancedMesh | undefined;
+  let impostors: THREE.Points | undefined;
+  let orbs: THREE.Points | undefined;
   let lines: THREE.LineSegments | undefined;
   let systems: System[] = [];
 
@@ -175,22 +208,25 @@ export async function attachScene(
     if (!state.hideImpostors) {
       const balls = impostorOrbs(state.cells, state.loadedCellIds);
       if (balls.length) {
-        impostors = instancedBalls(balls, 0xb8c8ff, 0x223355);
+        impostors = orbCloud(balls, new THREE.Color(0x9bb6ff), 56);
         scene.add(impostors);
       }
     }
     if (state.systems.length) {
-      orbs = instancedBalls(
+      orbs = orbCloud(
         state.systems.map((s) => ({
           x: s.coords.x,
           y: s.coords.y,
           z: s.coords.z,
-          r: s.name === "Sol" || s.name === "Colonia" || s.name === "Sagittarius A*"
-            ? 7
-            : 4.5,
+          r:
+            s.name === "Sol" ||
+            s.name === "Colonia" ||
+            s.name === "Sagittarius A*"
+              ? 720
+              : 480,
         })),
-        0xffe29a,
-        0x664422,
+        new THREE.Color(0xffe29a),
+        220,
       );
       scene.add(orbs);
     }
@@ -246,10 +282,10 @@ export async function attachScene(
     );
     raycaster.setFromCamera(ndc, camera);
     if (orbs) {
+      raycaster.params.Points = { threshold: 25 };
       const hits = raycaster.intersectObject(orbs);
-      const id = hits[0]?.instanceId;
-      if (id !== undefined) {
-        handlers.onSelectSystem(id);
+      if (hits[0]?.index !== undefined) {
+        handlers.onSelectSystem(hits[0].index);
         return;
       }
     }
