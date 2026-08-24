@@ -44,15 +44,20 @@ function systemPositions(systems: System[]): Float32Array {
   return pts;
 }
 
-function pointsMesh(positions: Float32Array, color: number, size: number) {
+function pointsMesh(
+  positions: Float32Array,
+  color: number,
+  size: number,
+  sizeAttenuation: boolean,
+) {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
   const mat = new THREE.PointsMaterial({
     color,
     size,
-    sizeAttenuation: true,
+    sizeAttenuation,
     transparent: true,
-    opacity: 0.9,
+    opacity: 0.92,
     depthWrite: false,
   });
   return new THREE.Points(geo, mat);
@@ -75,7 +80,7 @@ export async function attachScene(
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x07060c);
-  scene.fog = new THREE.FogExp2(0x07060c, 0.000012);
+  scene.fog = new THREE.FogExp2(0x07060c, 0.000004);
 
   const camera = new THREE.PerspectiveCamera(
     50,
@@ -83,7 +88,7 @@ export async function attachScene(
     1,
     200000,
   );
-  camera.position.set(0, 12000, -18000);
+  camera.position.set(4000, 18000, -12000);
 
   let renderer: THREE.WebGLRenderer;
   try {
@@ -147,11 +152,16 @@ export async function attachScene(
     lines = undefined;
 
     if (!state.hideImpostors) {
-      impostors = pointsMesh(impostorPositions(state.cells), 0xc8d4ff, 18);
+      impostors = pointsMesh(
+        impostorPositions(state.cells),
+        0xc8d4ff,
+        3,
+        false,
+      );
       scene.add(impostors);
     }
     if (state.systems.length) {
-      orbs = pointsMesh(systemPositions(state.systems), 0xffe08a, 28);
+      orbs = pointsMesh(systemPositions(state.systems), 0xffe08a, 8, false);
       scene.add(orbs);
     }
     if (state.selected && state.systems.length > 1) {
@@ -165,6 +175,7 @@ export async function attachScene(
             (s.coords.y - origin.y) ** 2 +
             (s.coords.z - origin.z) ** 2,
         }))
+        .filter((n) => n.d > 0 && n.d <= 200 * 200)
         .sort((a, b) => a.d - b.d)
         .slice(0, 5);
       const verts: number[] = [];
