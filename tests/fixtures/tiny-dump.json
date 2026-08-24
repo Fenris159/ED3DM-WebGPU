@@ -1,0 +1,23 @@
+[
+  {
+    "name": "Sol",
+    "coords": { "x": 0, "y": 0, "z": 0 },
+    "id64": 10477373803,
+    "population": 22780959567,
+    "primary_economy": "Refinery",
+    "allegiance": "Federation",
+    "government": "Democracy"
+  },
+  {
+    "name": "Alpha Centauri",
+    "coords": { "x": 3.03, "y": -0.09, "z": 3.16 },
+    "population": 0
+  },
+  {
+    "name": "Colonia",
+    "coords": { "x": -9530.5, "y": -910.28, "z": 19808.13 },
+    "primaryEconomy": "Colony",
+    "allegiance": "Independent",
+    "government": "Cooperative"
+  }
+]

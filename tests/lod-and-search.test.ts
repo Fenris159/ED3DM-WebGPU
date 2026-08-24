@@ -147,4 +147,33 @@ describe("LOD and search", () => {
     await map.focus({ x: 0, y: 0, z: 0 });
     expect(fetched).toEqual(["tiles/sol.json"]);
   });
+
+  it("lowering LOD unloads tiles outside the ring", async () => {
+    const map = await ED3DM.create({
+      container: document.body,
+      catalog: { overviewUrl: "/catalog/overview.json" },
+    });
+    await map.setLod("all");
+    expect(map.loadedTiles().sort()).toEqual([
+      "tiles/core.json",
+      "tiles/sol.json",
+    ]);
+    await map.focus({ x: 0, y: 0, z: 0 });
+    await map.setLod(0);
+    expect(map.loadedTiles()).toEqual(["tiles/sol.json"]);
+  });
+
+  it("clearSelection drops the selected System", async () => {
+    const map = await ED3DM.create({
+      container: document.body,
+      catalog: {
+        overviewUrl: "/catalog/overview.json",
+        searchIndexUrl: "/catalog/search.json",
+      },
+    });
+    await map.flyTo("Sol");
+    expect(map.selected()?.name).toBe("Sol");
+    map.clearSelection();
+    expect(map.selected()).toBeUndefined();
+  });
 });

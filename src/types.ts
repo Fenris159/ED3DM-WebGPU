@@ -31,17 +31,30 @@ export type TileFile = {
 
 export type SearchIndex = Record<string, Coords & { tile?: string }>;
 
+export type Route = {
+  name?: string;
+  points: Coords[];
+};
+
 export type LodSetting = number | "all";
+
+export type ColorByMode =
+  | "category"
+  | "economy"
+  | "allegiance"
+  | "government"
+  | "none";
 
 export type CatalogOptions = {
   overviewUrl: string;
   tileBaseUrl?: string;
   searchIndexUrl?: string;
+  routesUrl?: string;
 };
 
 export type CreateOptions = {
   container: HTMLElement | string;
   catalog: CatalogOptions;
   lod?: LodSetting;
-  onSystemClick?: (system: System) => void;
+  onSystemClick?: (system: System | undefined) => void;
 };

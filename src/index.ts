@@ -1,27 +1,34 @@
 import type {
   CatalogCell,
+  ColorByMode,
   CreateOptions,
   DensityOverview,
   LodSetting,
+  Route,
   System,
   TileFile,
 } from "./types";
+import { colorFor } from "./palettes";
 import { attachScene, type SceneHandle } from "./scene";
 
-export type { CreateOptions, LodSetting, System } from "./types";
+export type { ColorByMode, CreateOptions, LodSetting, System } from "./types";
+export { colorFor } from "./palettes";
 
 export type Ed3dmMap = {
   setLod: (lod: LodSetting) => Promise<void>;
   focus: (coords: { x: number; y: number; z: number }) => Promise<void>;
   flyTo: (name: string) => Promise<System | undefined>;
   setFilter: (filter: { categories?: string[] }) => void;
-  setColorBy: (
-    mode: "category" | "economy" | "allegiance" | "government" | "none",
-  ) => void;
+  setColorBy: (mode: ColorByMode) => void;
+  setGrid: (on: boolean) => void;
+  setBackdrop: (on: boolean) => void;
+  clearSelection: () => void;
   destroy: () => void;
   loadedTiles: () => string[];
   cells: () => CatalogCell[];
   selected: () => System | undefined;
+  visibleSystems: () => System[];
+  orbColor: (name: string) => string | undefined;
 };
 
 function resolveContainer(container: HTMLElement | string): HTMLElement {
@@ -58,9 +65,11 @@ export const ED3DM = {
     let lod: LodSetting = options.lod ?? 0;
     let focusAt: { x: number; y: number; z: number } | undefined;
     let selected: System | undefined;
-    let colorBy: "category" | "economy" | "allegiance" | "government" | "none" =
-      "none";
+    let colorBy: ColorByMode = "none";
     let categoryFilter: string[] | undefined;
+    let showGrid = false;
+    let showBackdrop = false;
+    let routes: Route[] = [];
     let searchIndex: Record<string, { x: number; y: number; z: number; tile?: string }> | null =
       null;
 
@@ -99,23 +108,54 @@ export const ED3DM = {
       return best;
     }
 
-    async function applyLod(): Promise<void> {
+    function wantedUrls(): Set<string> {
+      const keep = new Set<string>();
+      const add = (cell: CatalogCell | undefined) => {
+        if (!cell?.tile) return;
+        keep.add(tileUrl(options.catalog.tileBaseUrl, cell.tile));
+      };
       if (lod === "all") {
-        for (const cell of cells) await ensureTile(cell);
-        return;
+        for (const cell of cells) add(cell);
+        return keep;
       }
-      if (focusAt === undefined) return;
+      if (focusAt === undefined) return keep;
       if (lod === 0) {
-        const cell = nearestCell(focusAt);
-        if (cell) await ensureTile(cell);
-        return;
+        add(nearestCell(focusAt));
+        return keep;
       }
-      const radius = lod;
       for (const cell of cells) {
-        if (dist(focusAt, { x: cell.cx, y: cell.cy, z: cell.cz }) <= radius) {
-          await ensureTile(cell);
+        if (dist(focusAt, { x: cell.cx, y: cell.cy, z: cell.cz }) <= lod) {
+          add(cell);
         }
       }
+      return keep;
+    }
+
+    function unloadExcept(keep: Set<string>) {
+      for (const url of [...tileCache.keys()]) {
+        if (keep.has(url)) continue;
+        tileCache.delete(url);
+        loaded.delete(url);
+      }
+    }
+
+    async function applyLod(): Promise<void> {
+      const keep = wantedUrls();
+      if (lod === "all") {
+        for (const cell of cells) await ensureTile(cell);
+      } else if (focusAt !== undefined) {
+        if (lod === 0) {
+          const cell = nearestCell(focusAt);
+          if (cell) await ensureTile(cell);
+        } else {
+          for (const cell of cells) {
+            if (dist(focusAt, { x: cell.cx, y: cell.cy, z: cell.cz }) <= lod) {
+              await ensureTile(cell);
+            }
+          }
+        }
+      }
+      unloadExcept(keep);
     }
 
     await applyLod();
@@ -124,8 +164,21 @@ export const ED3DM = {
       return [...tileCache.values()].flat();
     }
 
+    function visible(): System[] {
+      const all = allSystems();
+      if (!categoryFilter?.length) return all;
+      return all.filter((s) => {
+        if (!s.cat?.length) return true;
+        return s.cat.some((c) => categoryFilter!.includes(c));
+      });
+    }
+
     let scene: SceneHandle | undefined;
     function paint() {
+      const shown = visible();
+      if (selected && !shown.some((s) => s.name === selected!.name)) {
+        selected = undefined;
+      }
       const loadedCellIds = new Set(
         cells
           .filter(
@@ -137,10 +190,14 @@ export const ED3DM = {
       );
       scene?.sync({
         cells,
-        systems: allSystems(),
+        systems: shown,
+        colors: shown.map((s) => colorFor(s, colorBy)),
         selected,
         hideImpostors: lod === "all",
         loadedCellIds,
+        routes,
+        grid: showGrid,
+        backdrop: showBackdrop,
       });
     }
 
@@ -185,11 +242,25 @@ export const ED3DM = {
       },
       setFilter(filter) {
         categoryFilter = filter.categories;
-        void categoryFilter;
+        paint();
       },
       setColorBy(mode) {
         colorBy = mode;
-        void colorBy;
+        paint();
+      },
+      setGrid(on) {
+        showGrid = on;
+        paint();
+      },
+      setBackdrop(on) {
+        showBackdrop = on;
+        paint();
+      },
+      clearSelection() {
+        selected = undefined;
+        options.onSystemClick?.(undefined);
+        scene?.flyGalaxy();
+        paint();
       },
       destroy() {
         scene?.destroy();
@@ -197,6 +268,7 @@ export const ED3DM = {
         el.replaceChildren();
         loaded.clear();
         tileCache.clear();
+        selected = undefined;
       },
       loadedTiles() {
         return [...loaded];
@@ -206,6 +278,14 @@ export const ED3DM = {
       },
       selected() {
         return selected;
+      },
+      visibleSystems() {
+        return visible();
+      },
+      orbColor(name) {
+        const sys = visible().find((s) => s.name === name);
+        if (!sys) return undefined;
+        return colorFor(sys, colorBy);
       },
     };
 
@@ -223,11 +303,20 @@ export const ED3DM = {
         hasGpu = false;
       }
     }
+    if (options.catalog.routesUrl) {
+      try {
+        const data = await loadJson<{ routes?: Route[] }>(options.catalog.routesUrl);
+        routes = data.routes ?? [];
+      } catch {
+        routes = [];
+      }
+    }
+
     if (hasGpu) {
       try {
         scene = await attachScene(el, {
           onSelectSystem(index) {
-            const sys = allSystems()[index];
+            const sys = visible()[index];
             if (!sys) return;
             selected = sys;
             options.onSystemClick?.(sys);
@@ -235,6 +324,12 @@ export const ED3DM = {
             paint();
           },
           onPickCell(coords) {
+            if (selected) {
+              selected = undefined;
+              options.onSystemClick?.(undefined);
+              scene?.flyGalaxy();
+              paint();
+            }
             void map.focus(coords);
           },
           onViewIdle(coords, distance) {
@@ -250,3 +345,5 @@ export const ED3DM = {
     return map;
   },
 };
+
+export default ED3DM;

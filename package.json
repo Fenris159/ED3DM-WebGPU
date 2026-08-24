@@ -8,9 +8,14 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:lib": "vite build --config vite.lib.config.ts",
+    "convert": "tsx src/converter/cli.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
+  },
+  "bin": {
+    "ed3dm-convert": "./src/converter/cli.ts"
   },
   "exports": {
     ".": "./src/index.ts"
@@ -19,8 +24,10 @@
     "three": "^0.172.0"
   },
   "devDependencies": {
+    "@types/node": "^26.2.0",
     "@types/three": "^0.172.0",
     "jsdom": "^25.0.1",
+    "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vite": "^6.0.7",
     "vitest": "^2.1.8"

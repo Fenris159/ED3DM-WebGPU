@@ -21,6 +21,7 @@
         left: 12px;
         right: 12px;
         display: flex;
+        flex-wrap: wrap;
         gap: 8px;
         align-items: center;
         pointer-events: none;
@@ -71,6 +72,23 @@
           <option value="all">everything real</option>
         </select>
       </label>
+      <label>Color
+        <select id="colorby">
+          <option value="none" selected>none</option>
+          <option value="economy">economy</option>
+          <option value="allegiance">allegiance</option>
+          <option value="government">government</option>
+        </select>
+      </label>
+      <label>Filter
+        <select id="filter">
+          <option value="" selected>all</option>
+          <option value="home">home</option>
+          <option value="colonia">colonia</option>
+        </select>
+      </label>
+      <label><input id="grid" type="checkbox" /> grid</label>
+      <label><input id="backdrop" type="checkbox" /> Milky Way</label>
     </div>
     <aside id="panel"></aside>
     <div id="edmap"></div>

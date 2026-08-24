@@ -102,6 +102,7 @@ function scatterSystems(origin, count, radius, named) {
       primary_economy: name === "Sol" ? "Refinery" : name === "Colonia" ? "Colony" : "None",
       allegiance: name === "Sol" ? "Federation" : name === "Colonia" ? "Independent" : "None",
       government: name === "Sol" ? "Democracy" : name === "Colonia" ? "Cooperative" : "None",
+      cat: name === "Sol" ? ["home"] : name === "Colonia" ? ["colonia"] : undefined,
     });
   }
   return { systems };
@@ -139,6 +140,24 @@ writeFileSync(
       Sol: { x: 0, y: 0, z: 0, tile: "boxel-sol" },
       Colonia: { ...COLONIA, tile: "boxel-colonia" },
       "Sagittarius A*": { ...SGR, tile: "boxel-core" },
+    },
+    null,
+    2,
+  ),
+);
+writeFileSync(
+  join(dir, "routes.json"),
+  JSON.stringify(
+    {
+      routes: [
+        {
+          name: "Sol to Colonia",
+          points: [
+            { x: 0, y: 0, z: 0 },
+            { x: COLONIA.x, y: COLONIA.y, z: COLONIA.z },
+          ],
+        },
+      ],
     },
     null,
     2,

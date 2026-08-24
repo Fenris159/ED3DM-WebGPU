@@ -10,7 +10,10 @@
       "population": 560000,
       "primary_economy": "Colony",
       "allegiance": "Independent",
-      "government": "Cooperative"
+      "government": "Cooperative",
+      "cat": [
+        "colonia"
+      ]
     },
     {
       "name": "SYS 19808-1",

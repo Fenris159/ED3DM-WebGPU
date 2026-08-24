@@ -1,16 +1,22 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import type { CatalogCell, System } from "./types";
+import { orbScale } from "./palettes";
+import type { CatalogCell, Route, System } from "./types";
 
 export type SceneHandle = {
   sync: (state: {
     cells: CatalogCell[];
     systems: System[];
+    colors?: string[];
     selected?: System;
     hideImpostors?: boolean;
     loadedCellIds?: Set<string>;
+    routes?: Route[];
+    grid?: boolean;
+    backdrop?: boolean;
   }) => void;
   flyCamera: (target: { x: number; y: number; z: number }) => void;
+  flyGalaxy: () => void;
   destroy: () => void;
 };
 
@@ -103,7 +109,7 @@ void main() {
 `;
 
 function orbCloud(
-  items: { x: number; y: number; z: number; r: number }[],
+  items: { x: number; y: number; z: number; r: number; hex?: string }[],
   color: THREE.Color,
   opts: { maxPx: number; map: THREE.Texture },
 ): THREE.Points {
@@ -119,10 +125,13 @@ function orbCloud(
   geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
   geo.setAttribute("aScale", new THREE.BufferAttribute(scale, 1));
   const cols = new Float32Array(items.length * 3);
+  const tint = new THREE.Color();
   for (let i = 0; i < items.length; i++) {
-    cols[i * 3] = color.r;
-    cols[i * 3 + 1] = color.g;
-    cols[i * 3 + 2] = color.b;
+    if (items[i]?.hex) tint.set(items[i]!.hex!);
+    else tint.copy(color);
+    cols[i * 3] = tint.r;
+    cols[i * 3 + 1] = tint.g;
+    cols[i * 3 + 2] = tint.b;
   }
   geo.setAttribute("color", new THREE.BufferAttribute(cols, 3));
   const mat = new THREE.ShaderMaterial({
@@ -221,24 +230,79 @@ export async function attachScene(
   let impostors: THREE.Points | undefined;
   let orbs: THREE.Points | undefined;
   let lines: THREE.LineSegments | undefined;
+  let routesLine: THREE.LineSegments | undefined;
+  let backdrop: THREE.Points | undefined;
   let systems: System[] = [];
+  let showGrid = false;
+  let showBackdrop = false;
+
+  const grid = new THREE.GridHelper(40000, 40, 0x1b3355, 0x122033);
+  grid.visible = false;
+  scene.add(grid);
+
+  const ringGeo = new THREE.RingGeometry(1.1, 1.35, 48);
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: 0x7cff9a,
+    side: THREE.DoubleSide,
+    transparent: true,
+    opacity: 0.9,
+    depthWrite: false,
+  });
+  const ring = new THREE.Mesh(ringGeo, ringMat);
+  ring.visible = false;
+  scene.add(ring);
 
   const raycaster = new THREE.Raycaster();
+
+  function ensureBackdrop() {
+    if (backdrop) return;
+    const n = 1800;
+    const items: { x: number; y: number; z: number; r: number }[] = [];
+    for (let i = 0; i < n; i++) {
+      const u = hash01(i, 9);
+      const v = hash01(i, 3);
+      const r = Math.sqrt(u) * 28000;
+      const th = v * Math.PI * 2;
+      items.push({
+        x: Math.cos(th) * r + 25,
+        y: (hash01(i, 11) - 0.5) * 600,
+        z: Math.sin(th) * r + 16000,
+        r: 900,
+      });
+    }
+    backdrop = orbCloud(items, new THREE.Color(0x334466), {
+      maxPx: 18,
+      map: orbMap,
+    });
+    scene.add(backdrop);
+  }
 
   function sync(state: {
     cells: CatalogCell[];
     systems: System[];
+    colors?: string[];
     selected?: System;
     hideImpostors?: boolean;
     loadedCellIds?: Set<string>;
+    routes?: Route[];
+    grid?: boolean;
+    backdrop?: boolean;
   }) {
     systems = state.systems;
+    showGrid = Boolean(state.grid);
+    showBackdrop = Boolean(state.backdrop);
+    grid.visible = showGrid;
+    if (showBackdrop) ensureBackdrop();
+    if (backdrop) backdrop.visible = showBackdrop;
+
     disposeMesh(impostors, scene);
     disposeMesh(orbs, scene);
     disposeMesh(lines, scene);
+    disposeMesh(routesLine, scene);
     impostors = undefined;
     orbs = undefined;
     lines = undefined;
+    routesLine = undefined;
 
     if (!state.hideImpostors) {
       const balls = impostorOrbs(state.cells, state.loadedCellIds);
@@ -252,21 +316,51 @@ export async function attachScene(
     }
     if (state.systems.length) {
       orbs = orbCloud(
-        state.systems.map((s) => ({
+        state.systems.map((s, i) => ({
           x: s.coords.x,
           y: s.coords.y,
           z: s.coords.z,
-          r:
-            s.name === "Sol" ||
-            s.name === "Colonia" ||
-            s.name === "Sagittarius A*"
-              ? 720
-              : 480,
+          r: orbScale(s.population),
+          hex: state.colors?.[i],
         })),
         new THREE.Color(0xffe29a),
         { maxPx: 220, map: orbMap },
       );
       scene.add(orbs);
+    }
+    ring.visible = Boolean(state.selected);
+    if (state.selected) {
+      ring.position.set(
+        state.selected.coords.x,
+        state.selected.coords.y,
+        state.selected.coords.z,
+      );
+    }
+    if (state.routes?.length) {
+      const verts: number[] = [];
+      for (const route of state.routes) {
+        for (let i = 1; i < route.points.length; i++) {
+          const a = route.points[i - 1]!;
+          const b = route.points[i]!;
+          verts.push(a.x, a.y, a.z, b.x, b.y, b.z);
+        }
+      }
+      if (verts.length) {
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute(
+          "position",
+          new THREE.BufferAttribute(new Float32Array(verts), 3),
+        );
+        routesLine = new THREE.LineSegments(
+          geo,
+          new THREE.LineBasicMaterial({
+            color: 0xffb347,
+            transparent: true,
+            opacity: 0.55,
+          }),
+        );
+        scene.add(routesLine);
+      }
     }
     if (state.selected && state.systems.length > 1) {
       const origin = state.selected.coords;
@@ -341,10 +435,23 @@ export async function attachScene(
   }
   window.addEventListener("resize", onResize);
 
+  function onContextLost(ev: Event) {
+    ev.preventDefault();
+  }
+  function onContextRestored() {
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    onResize();
+  }
+  canvas.addEventListener("webglcontextlost", onContextLost);
+  canvas.addEventListener("webglcontextrestored", onContextRestored);
+
   let raf = 0;
   function loop() {
     raf = requestAnimationFrame(loop);
     controls.update();
+    if (ring.visible) ring.lookAt(camera.position);
+    const d = controls.getDistance();
+    ring.scale.setScalar(Math.max(2, Math.min(40, d * 0.04)));
     renderer.render(scene, camera);
   }
   loop();
@@ -355,13 +462,25 @@ export async function attachScene(
       controls.target.set(target.x, target.y, target.z);
       camera.position.set(target.x + 22, target.y + 14, target.z + 52);
     },
+    flyGalaxy() {
+      controls.target.set(0, 0, 16000);
+      camera.position.set(-4000, 14000, -6000);
+    },
     destroy() {
       cancelAnimationFrame(raf);
       window.removeEventListener("resize", onResize);
+      canvas.removeEventListener("webglcontextlost", onContextLost);
+      canvas.removeEventListener("webglcontextrestored", onContextRestored);
       controls.dispose();
       disposeMesh(impostors, scene);
       disposeMesh(orbs, scene);
       disposeMesh(lines, scene);
+      disposeMesh(routesLine, scene);
+      disposeMesh(backdrop, scene);
+      scene.remove(grid);
+      scene.remove(ring);
+      ringGeo.dispose();
+      ringMat.dispose();
       orbMap.dispose();
       renderer.dispose();
       canvas.remove();

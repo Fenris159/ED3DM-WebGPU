@@ -10,7 +10,10 @@
       "population": 22780959567,
       "primary_economy": "Refinery",
       "allegiance": "Federation",
-      "government": "Democracy"
+      "government": "Democracy",
+      "cat": [
+        "home"
+      ]
     },
     {
       "name": "Alpha Centauri",
