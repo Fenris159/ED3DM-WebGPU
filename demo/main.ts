@@ -1,5 +1,6 @@
 import { ED3DM, MASS_CODES, PegeGalaxySource, distanceFromSol } from "../src/index";
 import pegeRuntimeUrl from "pege/pege-runtime.bin?url";
+import { heightRailLayout } from "./hud-layout";
 import { galaxyLoadPresentation } from "../src/loading-progress";
 import type {
   Ed3dmMap,
@@ -31,12 +32,34 @@ const heightReadout = document.querySelector("#height-readout") as HTMLElement;
 const heightUp = document.querySelector("#height-up") as HTMLButtonElement;
 const heightDown = document.querySelector("#height-down") as HTMLButtonElement;
 const masscode = document.querySelector("#masscode") as HTMLSelectElement;
+const hud = document.querySelector("#hud") as HTMLElement;
+const heightRail = document.querySelector("#height-rail") as HTMLElement;
+const viewAnchor = document.querySelector("#view-anchor") as HTMLElement;
 const HEIGHT_STEP = 10;
 let map: Ed3dmMap;
 let lodRevision = 0;
 let finestMassCode: MassCode = "h";
 let visibleDetailCount = 0;
 const pegeRuntimeV15Url = `${pegeRuntimeUrl}${pegeRuntimeUrl.includes("?") ? "&" : "?"}v=1.5.0`;
+
+function syncHeightRailLayout() {
+  const layout = heightRailLayout({
+    viewportHeight: window.innerHeight,
+    hudBottom: hud.getBoundingClientRect().bottom,
+    compassTop: viewAnchor.getBoundingClientRect().top,
+  });
+  heightRail.style.top = `${layout.top}px`;
+  heightRail.style.bottom = `${layout.bottom}px`;
+  heightRail.dataset.compact = String(layout.compact);
+  heightRail.hidden = layout.hidden;
+}
+
+const heightRailObserver = new ResizeObserver(syncHeightRailLayout);
+heightRailObserver.observe(hud);
+heightRailObserver.observe(viewAnchor);
+window.addEventListener("resize", syncHeightRailLayout);
+window.requestAnimationFrame(syncHeightRailLayout);
+void document.fonts.ready.then(syncHeightRailLayout);
 
 function setLoading(percent: number, label: string) {
   const value = Math.min(100, Math.max(0, Math.round(percent)));

@@ -123,6 +123,20 @@ export function planarPanDelta(
   };
 }
 
+export function topViewCameraPosition(
+  targetX: number,
+  planeY: number,
+  targetZ: number,
+  distance: number,
+  tilt = 0.04,
+): { x: number; y: number; z: number } {
+  return {
+    x: targetX,
+    y: planeY - distance * Math.cos(tilt),
+    z: targetZ + distance * Math.sin(tilt),
+  };
+}
+
 export function createSceneResizeScheduler(
   measure: () => { width: number; height: number },
   apply: (width: number, height: number) => void,
@@ -287,7 +301,17 @@ export async function attachScene(
     0.5,
     250000,
   );
-  camera.position.set(GALAXY_CORE.x, 90_000, GALAXY_CORE.z - 3_600);
+  const initialCameraPosition = topViewCameraPosition(
+    GALAXY_CORE.x,
+    0,
+    GALAXY_CORE.z,
+    90_000,
+  );
+  camera.position.set(
+    initialCameraPosition.x,
+    initialCameraPosition.y,
+    initialCameraPosition.z,
+  );
 
   const renderer = new THREE.WebGPURenderer({
     canvas,
@@ -1038,12 +1062,8 @@ export async function attachScene(
       oc._scale = 1;
       controls.target.set(tx, planeY, tz);
       camera.up.set(0, 1, 0);
-      const phi = 0.04;
-      camera.position.set(
-        tx,
-        planeY + d * Math.cos(phi),
-        tz - d * Math.sin(phi),
-      );
+      const position = topViewCameraPosition(tx, planeY, tz, d);
+      camera.position.set(position.x, position.y, position.z);
       const damping = controls.enableDamping;
       controls.enableDamping = false;
       controls.update();

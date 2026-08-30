@@ -79,9 +79,9 @@ function makeLabel(region: GalacticRegion, color: number): THREE.Mesh {
     side: THREE.DoubleSide,
   });
   const mesh = new THREE.Mesh(geo, mat);
-  mesh.rotation.x = -Math.PI / 2;
+  mesh.rotation.x = Math.PI / 2;
   mesh.position.set(p.x, 0, p.z);
-  const yaw = -Math.atan2(p.upX, -p.upZ);
+  const yaw = Math.atan2(p.upX, p.upZ);
   mesh.rotateOnWorldAxis(_up, yaw);
   mesh.frustumCulled = false;
   mesh.renderOrder = 4;

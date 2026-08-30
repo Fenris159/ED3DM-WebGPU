@@ -412,7 +412,7 @@
         z-index: 6;
         left: 14px;
         top: 88px;
-        bottom: 88px;
+        bottom: 100px;
         width: 52px;
         display: flex;
         flex-direction: column;
@@ -422,6 +422,16 @@
       }
       #height-rail * {
         pointer-events: auto;
+      }
+      #height-rail[hidden] {
+        display: none;
+      }
+      #height-rail[data-compact="true"] {
+        gap: 0;
+      }
+      #height-rail[data-compact="true"] > span,
+      #height-rail[data-compact="true"] > .height-nudge {
+        display: none;
       }
       #height-rail span {
         font-size: 10px;
@@ -434,7 +444,7 @@
         position: relative;
         flex: 1;
         width: 22px;
-        min-height: 120px;
+        min-height: 0;
       }
       .height-gutter {
         position: absolute;
