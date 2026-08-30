@@ -10,7 +10,12 @@ import {
   type BoxelWindow,
   type MassCode,
 } from "./boxel";
-import { orbCloud, stableOrbNoise, stableOrbVisibility } from "./orbs";
+import {
+  densityFieldColor,
+  orbCloud,
+  stableOrbNoise,
+  stableOrbVisibility,
+} from "./orbs";
 import { orbScale } from "./palettes";
 import { makeRegionLayerAsync, tintRegionLayer } from "./region-labels";
 import { GALAXY_CORE } from "./regions";
@@ -103,6 +108,19 @@ export function cameraCruiseProgress(elapsedMs: number, durationMs = 650): numbe
 }
 export function regionLabelsVisible(viewDistanceLy: number): boolean {
   return viewDistanceLy >= 2_000;
+}
+
+export function planarPanDelta(
+  dxPx: number,
+  dyPx: number,
+  worldPerPixel: number,
+  right: { x: number; z: number },
+  forward: { x: number; z: number },
+): { x: number; z: number } {
+  return {
+    x: -dxPx * worldPerPixel * right.x + dyPx * worldPerPixel * forward.x,
+    z: -dxPx * worldPerPixel * right.z + dyPx * worldPerPixel * forward.z,
+  };
 }
 export type SceneHandle = {
   sync: (state: {
@@ -389,10 +407,8 @@ export async function attachScene(
     const s =
       (2 * dist * Math.tan((camera.fov * Math.PI) / 360)) /
       Math.max(canvas.clientHeight, 1);
-    panOnHeightPlane(
-      -dxPx * s * _panRight.x - dyPx * s * _panFwd.x,
-      -dxPx * s * _panRight.z - dyPx * s * _panFwd.z,
-    );
+    const delta = planarPanDelta(dxPx, dyPx, s, _panRight, _panFwd);
+    panOnHeightPlane(delta.x, delta.z);
   }
 
   function planeViewAabb(): { minX: number; maxX: number; minZ: number; maxZ: number } {
@@ -615,7 +631,15 @@ export async function attachScene(
             y: system.coords.y,
             z: system.coords.z,
             r: 1,
-            hex: state.theme === "paper" ? "#706f69" : "#d8d0c0",
+            hex:
+              state.theme === "realistic"
+                ? densityFieldColor(
+                    system.coords,
+                    String(system.id64 ?? system.name),
+                  ).hex
+                : state.theme === "paper"
+                  ? "#706f69"
+                  : "#d8d0c0",
             visibility:
               stableOrbVisibility(String(system.id64 ?? system.name)) *
               (0.35 + 0.65 * nextDensityWeights[index]!),

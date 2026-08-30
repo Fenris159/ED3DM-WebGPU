@@ -146,6 +146,11 @@ export const ED3DM = {
     let searchIndex: Record<string, { x: number; y: number; z: number; tile?: string }> | null =
       null;
 
+    function reportDetailLoadError(error: unknown) {
+      const normalized = error instanceof Error ? error : new Error(String(error));
+      console.error("ED3DM: PEGE detail load failed", normalized);
+    }
+
     function abortSourceDetailRequests() {
       sourceLocalRequest?.abort();
       sourceSpatialRequest?.abort();
@@ -313,6 +318,16 @@ export const ED3DM = {
     async function applyLod(): Promise<void> {
       if (source) {
         if (!focusAt) return;
+
+        if (cameraDistanceLy >= 8_000) {
+          abortSourceDetailRequests();
+          sourceLocalSystems = [];
+          sourceSpatialTiles = [];
+          committedLocalRequestKey = undefined;
+          committedSpatialRequestKey = undefined;
+          paint();
+          return;
+        }
 
         // Exact local Systems and the tapered h-boxel neighborhood are
         // independent residency layers. Publish either as soon as it is ready
@@ -493,7 +508,11 @@ export const ED3DM = {
       try {
         do {
           viewLoadQueued = false;
-          await applyLod();
+          try {
+            await applyLod();
+          } catch (error) {
+            reportDetailLoadError(error);
+          }
           if (!viewLoadQueued) paint();
         } while (viewLoadQueued);
       } finally {
@@ -546,9 +565,11 @@ export const ED3DM = {
             scene?.flyCamera(preview.coords);
             scene?.setPlaneHeight(preview.coords.y);
             paint();
-            void applyLod().then(() => {
-              if (revision === flyRevision) paint();
-            });
+            void applyLod()
+              .then(() => {
+                if (revision === flyRevision) paint();
+              })
+              .catch(reportDetailLoadError);
           }
           const sys = await source.resolve(name);
           if (revision !== flyRevision) return undefined;
@@ -562,9 +583,11 @@ export const ED3DM = {
           options.onSystemClick?.(sys);
           scene?.flyCamera(sys.coords);
           paint();
-          void applyLod().then(() => {
-            if (revision === flyRevision) paint();
-          });
+          void applyLod()
+            .then(() => {
+              if (revision === flyRevision) paint();
+            })
+            .catch(reportDetailLoadError);
           return sys;
         }
         if (!searchIndex && catalog?.searchIndexUrl) {
@@ -765,7 +788,7 @@ export const ED3DM = {
         focusAt = cameraView.target;
         paint();
         if (source?.loadSpatialTiles) {
-          void applyLod().then(paint);
+          void applyLod().then(paint).catch(reportDetailLoadError);
         }
       } catch {
         // The data interface still works without a GPU.

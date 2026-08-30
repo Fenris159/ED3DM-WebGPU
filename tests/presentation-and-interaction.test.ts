@@ -12,6 +12,7 @@ import {
   projectedOrbDiameter,
   stableOrbVisibility,
   stableOrbNoise,
+  densityFieldColor,
 } from "../src/orbs";
 import {
   cameraAnchorTarget,
@@ -23,6 +24,7 @@ import {
   selectionPlaneHeight,
   selectionRailIndexes,
   railSelectableIndex,
+  planarPanDelta,
 } from "../src/scene";
 import type { GalaxyRegionRequest, GalaxySource, System } from "../src/types";
 
@@ -106,6 +108,19 @@ describe("galaxy presentation and interaction regressions", () => {
     expect(densityFieldOpacity(50)).toBe(0);
   });
 
+  it("colors aggregate density from a cool core into a varied warm outer disk", () => {
+    const core = densityFieldColor({ x: 25.2, y: 0, z: 25_900 }, "core");
+    const rim = densityFieldColor({ x: 40_025.2, y: 0, z: 25_900 }, "rim");
+    const nearbyRim = densityFieldColor(
+      { x: 39_900, y: 0, z: 25_900 },
+      "nearby-rim",
+    );
+    expect(core.b).toBeGreaterThan(core.r);
+    expect(rim.r).toBeGreaterThan(rim.b);
+    expect(nearbyRim).not.toEqual(rim);
+    expect(densityFieldColor({ x: 25.2, y: 0, z: 25_900 }, "core")).toEqual(core);
+  });
+
   it("moves the grid plane to a newly selected System without rewinding on deselection", () => {
     expect(selectionPlaneHeight(12, { x: 1, y: -345, z: 2 })).toBe(-345);
     expect(selectionPlaneHeight(-345, undefined)).toBe(-345);
@@ -135,6 +150,13 @@ describe("galaxy presentation and interaction regressions", () => {
 
   it("releases the selected rotation anchor when a planar pan begins", () => {
     expect(cameraAnchorAfterPlanePanStart({ x: 1, y: 2, z: 3 })).toBeUndefined();
+  });
+
+  it("maps right-drag vertical motion in the same grab direction as the pointer", () => {
+    const right = { x: 1, z: 0 };
+    const forward = { x: 0, z: 1 };
+    expect(planarPanDelta(10, 0, 2, right, forward)).toEqual({ x: -20, z: 0 });
+    expect(planarPanDelta(0, 10, 2, right, forward)).toEqual({ x: 0, z: 20 });
   });
 
   it("uses independent stable noise to diffuse far-field row energy", () => {

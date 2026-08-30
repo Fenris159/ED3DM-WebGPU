@@ -100,6 +100,7 @@ export function taperedPegeTilePointBudget(
   lod: LodSetting,
   keyWeights: readonly { weight: number }[],
 ): number {
+  if (cameraDistanceLy >= 8_000) return 0;
   const fullBudget = pegeTilePointBudget(
     cameraDistanceLy,
     lod,

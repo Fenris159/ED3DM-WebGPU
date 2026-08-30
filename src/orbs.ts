@@ -70,6 +70,27 @@ export function densityFieldOpacity(viewDistance: number): number {
   return smoothstepNumber(180, 8_000, Math.max(0, viewDistance));
 }
 
+export type DensityFieldColor = { r: number; g: number; b: number; hex: string };
+
+export function densityFieldColor(
+  coords: { x: number; y: number; z: number },
+  identity: string,
+): DensityFieldColor {
+  const radius = Math.hypot(coords.x - 25.2, coords.z - 25_900);
+  const radial = smoothstepNumber(0, 40_000, radius);
+  const variation = stableOrbNoise(identity, 0x7f4a7c15) - 0.5;
+  const warmth = Math.min(1, Math.max(0, radial + variation * 0.2));
+  const brightness = 0.9 + stableOrbNoise(identity, 0x92d68ca2) * 0.1;
+  const r = (0.72 + (1 - 0.72) * warmth) * brightness;
+  const g = (0.84 + (0.66 - 0.84) * warmth) * brightness;
+  const b = (1 + (0.34 - 1) * warmth) * brightness;
+  const channel = (value: number) =>
+    Math.round(Math.min(1, Math.max(0, value)) * 255)
+      .toString(16)
+      .padStart(2, "0");
+  return { r, g, b, hex: `#${channel(r)}${channel(g)}${channel(b)}` };
+}
+
 export function minimumOrbDiameter(
   viewDistance: number,
   visibility = 0.75,

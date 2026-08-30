@@ -123,5 +123,7 @@ describe("PEGE spatial tile view", () => {
     expect(pegeTilePointBudget(30_000, 0, 4)).toBe(500);
     const plan = cameraResidencyTilePlan({ x: 0, y: 0, z: 0 });
     expect(taperedPegeTilePointBudget(500, 10, plan)).toBe(716);
+    expect(taperedPegeTilePointBudget(8_000, "all", plan)).toBe(0);
+    expect(taperedPegeTilePointBudget(90_000, 10, plan)).toBe(0);
   });
 });
