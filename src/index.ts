@@ -22,12 +22,13 @@ import { colorFor } from "./palettes";
 import { attachScene, cameraZoomPercent, type SceneHandle } from "./scene";
 import {
   LOCAL_DETAIL_MAX_DISTANCE_LY,
+  cameraResidencyAnchor,
   cameraResidencyCacheScope,
-  cameraResidencyTilePlan,
-  cameraViewResidencyTilePlan,
   pegeTileKeyString,
-  progressivePegeTileShells,
-  taperedPegeTilePointBudget,
+  pegeTilePointBudget,
+  radialMassCodeShellContains,
+  radialMassCodeShellPlan,
+  radialMassCodeShellTargets,
 } from "./pege-tiles";
 import {
   FULL_DETAIL_CAMERA_DISTANCE_LY,
@@ -228,9 +229,19 @@ export const ED3DM = {
       }
     }
 
+    function detailResidencyAnchor(): { x: number; y: number; z: number } | undefined {
+      return cameraResidencyAnchor(
+        selected?.coords,
+        focusAt,
+        cameraView?.target.y,
+      );
+    }
+
     async function ensureSourceLocal(): Promise<boolean> {
-      if (!source || !focusAt) return false;
-      const residency = focusedResidencyRegion(focusAt, cameraDistanceLy);
+      if (!source) return false;
+      const anchor = detailResidencyAnchor();
+      if (!anchor) return false;
+      const residency = focusedResidencyRegion(anchor, cameraDistanceLy);
       const requestKey = `region:${residency.key}:${lod}`;
       if (requestKey === committedLocalRequestKey) return true;
       if (requestKey === sourceLocalRequestKey) return false;
@@ -273,23 +284,24 @@ export const ED3DM = {
     }
 
     async function ensureSourceSpatial(): Promise<boolean> {
-      if (!source?.loadSpatialTiles || !focusAt) return false;
+      if (!source?.loadSpatialTiles) return false;
+      const anchor = detailResidencyAnchor();
+      if (!anchor) return false;
       const fullDetail = cameraDistanceLy <= FULL_DETAIL_CAMERA_DISTANCE_LY;
-      const keyWeights = fullDetail
-        ? cameraResidencyTilePlan(focusAt, true)
-        : cameraView
-          ? cameraViewResidencyTilePlan(cameraView)
-          : cameraResidencyTilePlan(focusAt);
-      const cacheScope = cameraResidencyCacheScope(focusAt);
-      const totalTargetSystems = taperedPegeTilePointBudget(
+      const shells = radialMassCodeShellPlan(anchor);
+      const cacheScope = cameraResidencyCacheScope(anchor);
+      const totalTargetSystems = pegeTilePointBudget(
         cameraDistanceLy,
         lod,
-        keyWeights,
+        shells.reduce((sum, shell) => sum + shell.keys.length, 0),
       );
       if (totalTargetSystems === 0) return false;
-      const requestKey = `tiles:${keyWeights
-        .map(({ key, weight }) => `${pegeTileKeyString(key)}@${weight.toFixed(3)}`)
-        .join(",")}:${totalTargetSystems}`;
+      const shellTargets = radialMassCodeShellTargets(shells, totalTargetSystems);
+      const requestKey = `tiles:${shells
+        .map((shell, index) =>
+          `${shell.tier}:${shell.keys.map(pegeTileKeyString).join(",")}@${shellTargets[index]}`,
+        )
+        .join("|")}`;
       if (requestKey === committedSpatialRequestKey) return true;
       if (requestKey === sourceSpatialRequestKey) return false;
       sourceSpatialRequest?.abort();
@@ -298,8 +310,7 @@ export const ED3DM = {
       sourceSpatialRequestKey = requestKey;
       try {
         const previousSpatialTiles = sourceSpatialTiles;
-        const progressiveTiles = [];
-        const shells = progressivePegeTileShells(keyWeights, totalTargetSystems);
+        const progressiveTiles: GalaxySpatialTile[] = [];
         const spatialStart = fullDetail ? 0.35 : 0;
         for (const [index, shell] of shells.entries()) {
           const shellStart =
@@ -308,16 +319,23 @@ export const ED3DM = {
             spatialStart + ((1 - spatialStart) * (index + 1)) / shells.length;
           const tiles = await source.loadSpatialTiles(
             {
-              keys: shell.keyWeights.map(({ key }) => key),
-              totalTargetSystems: shell.totalTargetSystems,
-              keyWeights: shell.keyWeights,
+              keys: shell.keys,
+              totalTargetSystems: shellTargets[index]!,
               cacheScope,
               detailProgressRange: { start: shellStart, end: shellEnd },
             },
             controller.signal,
           );
           if (controller.signal.aborted) return false;
-          progressiveTiles.push(...tiles);
+          progressiveTiles.push(
+            ...tiles.map((tile) => ({
+              ...tile,
+              key: `${tile.key}@${shell.tier}`,
+              systems: tile.systems.filter(({ coords }) =>
+                radialMassCodeShellContains(shell, coords),
+              ),
+            })),
+          );
           sourceSpatialTiles = mergeSpatialTiles(
             previousSpatialTiles,
             progressiveTiles,
@@ -354,9 +372,9 @@ export const ED3DM = {
           return;
         }
 
-        // Exact local Systems and the tapered h-boxel neighborhood are
-        // independent residency layers. Publish either as soon as it is ready
-        // and retain the other layer while its replacement is generated.
+        // The selected System, or the camera focus on the current height plane,
+        // anchors one complete planar h/g/f/e residency stack. Each spatial
+        // tier is published as a coherent four-sided ring.
         if (cameraDistanceLy <= FULL_DETAIL_CAMERA_DISTANCE_LY) {
           if (await ensureSourceLocal()) paint();
           if (await ensureSourceSpatial()) paint();
@@ -369,10 +387,6 @@ export const ED3DM = {
             committedLocalRequestKey = undefined;
             paint();
           }
-          return;
-        }
-        if (cameraDistanceLy >= LOCAL_DETAIL_MAX_DISTANCE_LY) {
-          sourceLocalRequest?.abort();
           return;
         }
         await ensureSourceLocal();

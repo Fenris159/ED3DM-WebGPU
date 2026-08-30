@@ -18,6 +18,98 @@ const H_NEIGHBORHOOD_TILE_COUNT = 27;
 const H_BOUNDARY_BLEND_FRACTION = 0.3;
 export const pegeTileKeyString = galaxyViewTileKeyString;
 
+export function cameraResidencyAnchor(
+  selected: { x: number; y: number; z: number } | undefined,
+  focus: { x: number; y: number; z: number } | undefined,
+  planeY: number | undefined,
+): { x: number; y: number; z: number } | undefined {
+  if (selected) return selected;
+  if (!focus) return undefined;
+  return { x: focus.x, y: planeY ?? focus.y, z: focus.z };
+}
+
+export type RadialMassCodeShell = {
+  tier: "h" | "g" | "f" | "e";
+  weight: number;
+  outerBounds: GalaxyViewBounds;
+  innerBounds?: GalaxyViewBounds;
+  keys: PegeSpatialTileKey[];
+};
+
+/**
+ * Camera-local residency is anchored to the focused h boxel, not the frustum.
+ * The canonical PEGE storage tiles remain h-sized. G/F/E define successively
+ * smaller geometric expansion bands around the focused Forge h boxel; PEGE
+ * tile results are clipped into those bands after generation. Every band spans
+ * all four X/Z sides at one Y layer and receives a smaller stable prefix.
+ */
+export function radialMassCodeShellPlan(
+  target: { x: number; y: number; z: number },
+): RadialMassCodeShell[] {
+  const h = containingBoxel(target, "h");
+  const tiers = [
+    { tier: "h" as const, expansion: 0, weight: 1 },
+    { tier: "g" as const, expansion: 640, weight: 0.45 },
+    { tier: "f" as const, expansion: 960, weight: 0.25 },
+    { tier: "e" as const, expansion: 1_120, weight: 0.12 },
+  ];
+  let innerBounds: GalaxyViewBounds | undefined;
+  return tiers.map(({ tier, expansion, weight }) => {
+    const outerBounds: GalaxyViewBounds = {
+      minimum: { x: h.ox - expansion, y: h.oy, z: h.oz - expansion },
+      maximum: {
+        x: h.ox + h.size + expansion,
+        y: h.oy + h.size,
+        z: h.oz + h.size + expansion,
+      },
+    };
+    const shell: RadialMassCodeShell = {
+      tier,
+      weight,
+      outerBounds,
+      ...(innerBounds ? { innerBounds } : {}),
+      keys: visiblePegeTileKeys(outerBounds, h.size, MAX_VISIBLE_PEGE_TILES),
+    };
+    innerBounds = outerBounds;
+    return shell;
+  });
+}
+
+export function radialMassCodeShellContains(
+  shell: RadialMassCodeShell,
+  coords: { x: number; y: number; z: number },
+): boolean {
+  const outer = shell.outerBounds;
+  if (
+    coords.x < outer.minimum.x || coords.x >= outer.maximum.x ||
+    coords.y < outer.minimum.y || coords.y >= outer.maximum.y ||
+    coords.z < outer.minimum.z || coords.z >= outer.maximum.z
+  ) return false;
+  const inner = shell.innerBounds;
+  return !inner || (
+    coords.x < inner.minimum.x || coords.x >= inner.maximum.x ||
+    coords.z < inner.minimum.z || coords.z >= inner.maximum.z
+  );
+}
+
+export function radialMassCodeShellTargets(
+  shells: readonly RadialMassCodeShell[],
+  totalTargetSystems: number,
+): number[] {
+  if (shells.length === 0 || totalTargetSystems <= 0) return [];
+  const totalWeight = shells.reduce((sum, shell) => sum + shell.weight, 0);
+  let remaining = Math.max(shells.length, Math.floor(totalTargetSystems));
+  return shells.map((shell, index) => {
+    const later = shells.length - index - 1;
+    const requested = index === shells.length - 1
+      ? remaining
+      : Math.round(totalTargetSystems * shell.weight / totalWeight);
+    const target = Math.max(1, Math.min(remaining - later, requested));
+    remaining -= target;
+    return target;
+  });
+}
+
 export function focusedPegeTileKey(
   target: { x: number; y: number; z: number },
   cameraDistanceLy: number,

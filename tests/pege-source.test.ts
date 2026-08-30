@@ -30,6 +30,7 @@ import {
   PEGE_OVERVIEW_CONFIG,
   pegeOverviewCacheId,
 } from "../src/pege-overview";
+import { radialMassCodeShellPlan } from "../src/pege-tiles";
 import type {
   GalaxyRegionRequest,
   GalaxyOverviewRequest,
@@ -817,7 +818,7 @@ describe("PEGE galaxy adapter", () => {
     map.destroy();
   });
 
-  it("keeps exact local Systems and tapered adjacent h-boxel detail resident together", async () => {
+  it("keeps exact local Systems and complete radial h/g/f/e detail resident together", async () => {
     const overview: System = {
       name: "Overview",
       id64: "1",
@@ -836,21 +837,42 @@ describe("PEGE galaxy adapter", () => {
       coords: { x: 4, y: 2, z: 3 },
       generation: "ordinary",
     };
-    const taperedNeighbor: System = {
-      name: "Tapered neighbor",
+    const hNeighbor: System = {
+      name: "H neighbor",
       id64: "4",
-      coords: { x: 400, y: 200, z: 300 },
+      coords: { x: 400, y: 200, z: 0 },
       generation: "ordinary",
     };
-    const loadSpatialTiles = vi.fn(async (request: GalaxySpatialTileRequest) => [
-      {
-        key: "0/0/0/0",
+    const gNeighbor: System = {
+      name: "G neighbor",
+      id64: "5",
+      coords: { x: -100, y: 200, z: 500 },
+      generation: "ordinary",
+    };
+    const fNeighbor: System = {
+      name: "F neighbor",
+      id64: "6",
+      coords: { x: -800, y: 200, z: 0 },
+      generation: "ordinary",
+    };
+    const eNeighbor: System = {
+      name: "E neighbor",
+      id64: "7",
+      coords: { x: -1_100, y: 200, z: 0 },
+      generation: "ordinary",
+    };
+    const spatialNeighbors = [hNeighbor, gNeighbor, fNeighbor, eNeighbor];
+    let spatialCall = 0;
+    const loadSpatialTiles = vi.fn(async (request: GalaxySpatialTileRequest) => {
+      const system = spatialNeighbors[spatialCall++]!;
+      return [{
+        key: `${request.keys[0]!.level}/${request.keys[0]!.x}/${request.keys[0]!.y}/${request.keys[0]!.z}`,
         tileKey: request.keys[0]!,
         targetSystems: request.totalTargetSystems,
         populationWeight: 1,
-        systems: [taperedNeighbor],
-      },
-    ]);
+        systems: [system],
+      }];
+    });
     const source: GalaxySource = {
       loadOverview: vi.fn(async () => ({ systems: [overview] })),
       loadRegion: vi.fn(async () => [target, exactNeighbor]),
@@ -863,20 +885,32 @@ describe("PEGE galaxy adapter", () => {
 
     const map = await ED3DM.create({ container: document.body, source, lod: "all" });
     await map.flyTo(target.name);
-    await vi.waitFor(() => expect(loadSpatialTiles).toHaveBeenCalled());
+    await vi.waitFor(() => expect(loadSpatialTiles).toHaveBeenCalledTimes(4));
     await vi.waitFor(() =>
       expect(map.visibleSystems().map(({ name }) => name)).toEqual(
         expect.arrayContaining([
           "Overview",
           "Target",
           "Exact neighbor",
-          "Tapered neighbor",
+          "H neighbor",
+          "G neighbor",
+          "F neighbor",
+          "E neighbor",
         ]),
       ),
     );
-    const request = loadSpatialTiles.mock.calls.at(-1)![0];
-    expect(request.keyWeights?.length).toBeGreaterThan(1);
-    expect(request.keyWeights?.some(({ weight }) => weight < 1)).toBe(true);
+    const shells = radialMassCodeShellPlan(target.coords);
+    expect(loadSpatialTiles.mock.calls.map(([request]) => request.keys.length))
+      .toEqual(shells.map(({ keys }) => keys.length));
+    expect(loadSpatialTiles.mock.calls.every(([request]) =>
+      request.keyWeights === undefined,
+    )).toBe(true);
+    expect(loadSpatialTiles.mock.calls.map(([request]) => request.totalTargetSystems))
+      .toEqual([...loadSpatialTiles.mock.calls]
+        .map(([request]) => request.totalTargetSystems)
+        .sort((a, b) => b - a));
+    expect(loadSpatialTiles.mock.calls.map(([request]) => request.keys))
+      .toEqual(shells.map(({ keys }) => keys));
     const progressRanges = loadSpatialTiles.mock.calls.map(
       ([tileRequest]) => tileRequest.detailProgressRange!,
     );

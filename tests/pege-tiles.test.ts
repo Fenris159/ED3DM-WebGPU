@@ -3,17 +3,38 @@ import { describe, expect, it } from "vitest";
 import {
   MAX_VISIBLE_PEGE_TILES,
   cameraViewResidencyTilePlan,
+  cameraResidencyAnchor,
   cameraResidencyTileKeys,
   cameraResidencyTilePlan,
   focusedPegeTileKey,
   pegeTileLevelForDistance,
   pegeTilePointBudget,
   progressivePegeTileShells,
+  radialMassCodeShellContains,
+  radialMassCodeShellPlan,
+  radialMassCodeShellTargets,
   taperedPegeTilePointBudget,
   visiblePegeTileKeys,
 } from "../src/pege-tiles";
 
 describe("PEGE spatial tile view", () => {
+  it("anchors residency to selection, then camera focus plus height as fallback", () => {
+    expect(
+      cameraResidencyAnchor(
+        { x: 1, y: 2, z: 3 },
+        { x: 100, y: 200, z: 300 },
+        400,
+      ),
+    ).toEqual({ x: 1, y: 2, z: 3 });
+    expect(
+      cameraResidencyAnchor(
+        undefined,
+        { x: 100, y: 200, z: 300 },
+        400,
+      ),
+    ).toEqual({ x: 100, y: 400, z: 300 });
+  });
+
   it("keeps foreground residency in the one camera-target tile", () => {
     expect(focusedPegeTileKey({ x: 0, y: 0, z: 0 }, 30_000)).toEqual({
       level: pegeTileLevelForDistance(30_000),
@@ -145,5 +166,70 @@ describe("PEGE spatial tile view", () => {
     expect(plan.length).toBeGreaterThan(1);
     expect(plan.some(({ weight }) => weight < 1)).toBe(true);
     expect(plan.length).toBeLessThanOrEqual(MAX_VISIBLE_PEGE_TILES);
+  });
+
+  it("does not let an asymmetric camera window turn local residency into a one-way wedge", () => {
+    const plan = cameraViewResidencyTilePlan({
+      target: { x: 635, y: 635, z: 635 },
+      position: { x: 635, y: -1_100, z: 650 },
+      direction: { x: 0, y: 1, z: 0 },
+      distanceLy: 1_734,
+      verticalFovDegrees: 50,
+      aspect: 1.6,
+      visibleBounds: {
+        minimum: { x: 500, y: -600, z: 500 },
+        maximum: { x: 5_500, y: 1_900, z: 5_500 },
+      },
+    });
+    const center = focusedPegeTileKey({ x: 635, y: 635, z: 635 }, 1_280);
+    expect(Math.min(...plan.map(({ key }) => key.x))).toBeLessThan(center.x);
+    expect(Math.max(...plan.map(({ key }) => key.x))).toBeGreaterThan(center.x);
+    expect(Math.min(...plan.map(({ key }) => key.z))).toBeLessThan(center.z);
+    expect(Math.max(...plan.map(({ key }) => key.z))).toBeGreaterThan(center.z);
+  });
+
+  it("radiates complete H, G, F, and E detail tiers around all four planar sides", () => {
+    const shells = radialMassCodeShellPlan({ x: 635, y: 635, z: 635 });
+    expect(shells.map(({ tier }) => tier)).toEqual(["h", "g", "f", "e"]);
+    expect(shells.map(({ weight }) => weight)).toEqual([1, 0.45, 0.25, 0.12]);
+    expect(shells.map(({ outerBounds }) =>
+      outerBounds.maximum.x - outerBounds.minimum.x,
+    )).toEqual([1_280, 2_560, 3_200, 3_520]);
+    expect(shells.map(({ outerBounds }) =>
+      outerBounds.maximum.z - outerBounds.minimum.z,
+    )).toEqual([1_280, 2_560, 3_200, 3_520]);
+    expect(shells.map(({ outerBounds }) =>
+      outerBounds.maximum.y - outerBounds.minimum.y,
+    )).toEqual([1_280, 1_280, 1_280, 1_280]);
+    expect(shells.every(({ keys }) =>
+      keys.length > 0 && keys.length <= MAX_VISIBLE_PEGE_TILES,
+    )).toBe(true);
+
+    const [h, g, f, e] = shells;
+    const hBounds = h!.outerBounds;
+    const centerX = (hBounds.minimum.x + hBounds.maximum.x) / 2;
+    const centerZ = (hBounds.minimum.z + hBounds.maximum.z) / 2;
+    expect(radialMassCodeShellContains(h!, { x: centerX, y: 635, z: centerZ })).toBe(true);
+    expect(radialMassCodeShellContains(g!, { x: hBounds.minimum.x - 1, y: 635, z: centerZ })).toBe(true);
+    expect(radialMassCodeShellContains(g!, { x: hBounds.maximum.x, y: 635, z: centerZ })).toBe(true);
+    expect(radialMassCodeShellContains(g!, { x: centerX, y: 635, z: hBounds.minimum.z - 1 })).toBe(true);
+    expect(radialMassCodeShellContains(g!, { x: centerX, y: 635, z: hBounds.maximum.z })).toBe(true);
+    expect(radialMassCodeShellContains(g!, { x: 635, y: 635, z: 635 })).toBe(false);
+    expect(radialMassCodeShellContains(f!, {
+      x: g!.outerBounds.minimum.x - 1,
+      y: 635,
+      z: centerZ,
+    })).toBe(true);
+    expect(radialMassCodeShellContains(e!, {
+      x: f!.outerBounds.minimum.x - 1,
+      y: 635,
+      z: centerZ,
+    })).toBe(true);
+
+    const targets = radialMassCodeShellTargets(shells, 60_000);
+    expect(targets.reduce((sum, target) => sum + target, 0)).toBe(60_000);
+    expect(targets[0]).toBeGreaterThan(targets[1]!);
+    expect(targets[1]).toBeGreaterThan(targets[2]!);
+    expect(targets[2]).toBeGreaterThan(targets[3]!);
   });
 });
