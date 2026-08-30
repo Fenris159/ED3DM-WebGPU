@@ -21,12 +21,18 @@ import type {
 import { colorFor } from "./palettes";
 import { attachScene, cameraZoomPercent, type SceneHandle } from "./scene";
 import {
+  LOCAL_DETAIL_MAX_DISTANCE_LY,
+  cameraResidencyCacheScope,
   cameraResidencyTilePlan,
+  cameraViewResidencyTilePlan,
   pegeTileKeyString,
   progressivePegeTileShells,
   taperedPegeTilePointBudget,
 } from "./pege-tiles";
-import { focusedResidencyRegion } from "./lod";
+import {
+  FULL_DETAIL_CAMERA_DISTANCE_LY,
+  focusedResidencyRegion,
+} from "./lod";
 
 export type {
   ColorByMode,
@@ -268,10 +274,13 @@ export const ED3DM = {
 
     async function ensureSourceSpatial(): Promise<boolean> {
       if (!source?.loadSpatialTiles || !focusAt) return false;
-      const keyWeights = cameraResidencyTilePlan(
-        focusAt,
-        cameraDistanceLy < 180,
-      );
+      const fullDetail = cameraDistanceLy <= FULL_DETAIL_CAMERA_DISTANCE_LY;
+      const keyWeights = fullDetail
+        ? cameraResidencyTilePlan(focusAt, true)
+        : cameraView
+          ? cameraViewResidencyTilePlan(cameraView)
+          : cameraResidencyTilePlan(focusAt);
+      const cacheScope = cameraResidencyCacheScope(focusAt);
       const totalTargetSystems = taperedPegeTilePointBudget(
         cameraDistanceLy,
         lod,
@@ -288,9 +297,10 @@ export const ED3DM = {
       sourceSpatialRequest = controller;
       sourceSpatialRequestKey = requestKey;
       try {
+        const previousSpatialTiles = sourceSpatialTiles;
         const progressiveTiles = [];
         const shells = progressivePegeTileShells(keyWeights, totalTargetSystems);
-        const spatialStart = cameraDistanceLy < 180 ? 0.35 : 0;
+        const spatialStart = fullDetail ? 0.35 : 0;
         for (const [index, shell] of shells.entries()) {
           const shellStart =
             spatialStart + ((1 - spatialStart) * index) / shells.length;
@@ -301,15 +311,20 @@ export const ED3DM = {
               keys: shell.keyWeights.map(({ key }) => key),
               totalTargetSystems: shell.totalTargetSystems,
               keyWeights: shell.keyWeights,
+              cacheScope,
               detailProgressRange: { start: shellStart, end: shellEnd },
             },
             controller.signal,
           );
           if (controller.signal.aborted) return false;
           progressiveTiles.push(...tiles);
-          sourceSpatialTiles = [...progressiveTiles];
+          sourceSpatialTiles = mergeSpatialTiles(
+            previousSpatialTiles,
+            progressiveTiles,
+          );
           paint();
         }
+        sourceSpatialTiles = mergeSpatialTiles(progressiveTiles);
         committedSpatialRequestKey = requestKey;
         return true;
       } catch (error) {
@@ -329,7 +344,7 @@ export const ED3DM = {
       if (source) {
         if (!focusAt) return;
 
-        if (cameraDistanceLy >= 8_000) {
+        if (cameraDistanceLy >= LOCAL_DETAIL_MAX_DISTANCE_LY) {
           abortSourceDetailRequests();
           sourceLocalSystems = [];
           sourceSpatialTiles = [];
@@ -342,7 +357,7 @@ export const ED3DM = {
         // Exact local Systems and the tapered h-boxel neighborhood are
         // independent residency layers. Publish either as soon as it is ready
         // and retain the other layer while its replacement is generated.
-        if (cameraDistanceLy < 180) {
+        if (cameraDistanceLy <= FULL_DETAIL_CAMERA_DISTANCE_LY) {
           if (await ensureSourceLocal()) paint();
           if (await ensureSourceSpatial()) paint();
           return;
@@ -356,7 +371,7 @@ export const ED3DM = {
           }
           return;
         }
-        if (cameraDistanceLy >= 8_000) {
+        if (cameraDistanceLy >= LOCAL_DETAIL_MAX_DISTANCE_LY) {
           sourceLocalRequest?.abort();
           return;
         }
@@ -402,6 +417,21 @@ export const ED3DM = {
       return system.id64 === undefined
         ? `${system.name}\0${system.coords.x}\0${system.coords.y}\0${system.coords.z}`
         : String(system.id64);
+    }
+
+    function mergeSpatialTiles(
+      ...groups: readonly GalaxySpatialTile[][]
+    ): GalaxySpatialTile[] {
+      const merged = new Map<string, GalaxySpatialTile>();
+      for (const group of groups) {
+        for (const tile of group) {
+          const current = merged.get(tile.key);
+          if (!current || tile.targetSystems >= current.targetSystems) {
+            merged.set(tile.key, tile);
+          }
+        }
+      }
+      return [...merged.values()];
     }
 
     function allSystems(): System[] {
@@ -780,11 +810,12 @@ export const ED3DM = {
             options.onZoom?.(cameraZoomPercent(view.distanceLy));
             if (!source) {
               acceptView(view);
-              if (view.distanceLy < 8_000) void map.focus(view.target);
+              if (view.distanceLy < LOCAL_DETAIL_MAX_DISTANCE_LY) {
+                void map.focus(view.target);
+              }
               return;
             }
             acceptView(view);
-            abortSourceDetailRequests();
             scheduleViewLod(view, 0);
           },
           onPlaneHeight(y) {

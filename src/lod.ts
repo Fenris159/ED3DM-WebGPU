@@ -41,6 +41,9 @@ export function localEdgeWeight(normalizedDistance: number): number {
   return 1 - smooth;
 }
 
+export const FULL_DETAIL_CAMERA_DISTANCE_LY = 300;
+export const FULL_DETAIL_REGION_SIZE_LY = 640;
+
 export function focusedResidencyRegion(
   target: { x: number; y: number; z: number },
   cameraDistanceLy: number,
@@ -52,10 +55,12 @@ export function focusedResidencyRegion(
   key: string;
 } {
   const distance = Math.max(10, cameraDistanceLy);
-  const size = Math.min(
-    1_280,
-    10 * 2 ** Math.max(0, Math.floor(Math.log2(distance / 10))),
-  );
+  const size = distance <= FULL_DETAIL_CAMERA_DISTANCE_LY
+    ? FULL_DETAIL_REGION_SIZE_LY
+    : Math.min(
+        1_280,
+        10 * 2 ** Math.max(0, Math.floor(Math.log2(distance / 10))),
+      );
   const origin = { x: -49_985, y: -40_985, z: -24_105 };
   const cell = (coordinate: number, axisOrigin: number) =>
     axisOrigin + Math.floor((coordinate - axisOrigin) / size) * size;

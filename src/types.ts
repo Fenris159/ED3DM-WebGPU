@@ -113,6 +113,8 @@ export type PegeSpatialTileKey = {
 export type GalaxySpatialTileRequest = {
   keys: readonly PegeSpatialTileKey[];
   totalTargetSystems: number;
+  /** Stable local camera zone. A new scope permits the source to evict the old zone cache. */
+  cacheScope?: string;
   keyWeights?: readonly {
     key: PegeSpatialTileKey;
     weight: number;

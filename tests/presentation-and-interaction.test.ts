@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { ED3DM } from "../src/index";
 import {
+  cameraProximityOpacity,
   minimumOrbDiameter,
   farFieldOrbOpacity,
   layeredOrbOpacity,
@@ -31,6 +32,40 @@ import {
 import type { GalaxyRegionRequest, GalaxySource, System } from "../src/types";
 
 describe("galaxy presentation and interaction regressions", () => {
+  it("fades and click-masks camera-side foreground stars without hiding the target plane", () => {
+    const camera = { x: 0, y: 100, z: 0 };
+    expect(
+      cameraProximityOpacity(
+        { x: 0, y: 92, z: 0 },
+        camera,
+        100,
+        0,
+        false,
+        false,
+      ),
+    ).toBeLessThan(0.1);
+    expect(
+      cameraProximityOpacity(
+        { x: 0, y: 0, z: 0 },
+        camera,
+        100,
+        0,
+        false,
+        false,
+      ),
+    ).toBe(1);
+    expect(
+      cameraProximityOpacity(
+        { x: 0, y: 92, z: 0 },
+        camera,
+        100,
+        0,
+        true,
+        true,
+      ),
+    ).toBe(1);
+  });
+
   function luminance(hex: string): number {
     const rgb = hex.match(/[\da-f]{2}/gi)!.map((part) => {
       const value = Number.parseInt(part, 16) / 255;

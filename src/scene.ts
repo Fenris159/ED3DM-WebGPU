@@ -474,6 +474,7 @@ export async function attachScene(
   let densityField: THREE.Object3D | undefined;
   let orbColors: (string | undefined)[] = [];
   let orbDetails: boolean[] = [];
+  let orbSelected: boolean[] = [];
   let orbDensityWeights: number[] = [];
   let orbTheme: VisualTheme | undefined;
   let lines: THREE.LineSegments | undefined;
@@ -713,8 +714,16 @@ export async function attachScene(
     regionGrid?: boolean;
     theme?: VisualTheme;
   }) {
+    const nextSelectedSystemKey = state.selected
+      ? String(state.selected.id64 ?? state.selected.name)
+      : undefined;
     const nextColors = state.systems.map((_, index) => state.colors?.[index]);
     const nextDetails = state.systems.map((_, index) => Boolean(state.details?.[index]));
+    const nextSelected = state.systems.map(
+      (system) =>
+        nextSelectedSystemKey !== undefined &&
+        String(system.id64 ?? system.name) === nextSelectedSystemKey,
+    );
     const nextDensityWeights = state.systems.map((_, index) =>
       Math.min(1, Math.max(0, state.densityWeights?.[index] ?? 0)),
     );
@@ -726,12 +735,10 @@ export async function attachScene(
           system !== systems[index] ||
           nextColors[index] !== orbColors[index] ||
           nextDetails[index] !== orbDetails[index] ||
+          nextSelected[index] !== orbSelected[index] ||
           nextDensityWeights[index] !== orbDensityWeights[index],
       );
     systems = state.systems;
-    const nextSelectedSystemKey = state.selected
-      ? String(state.selected.id64 ?? state.selected.name)
-      : undefined;
     if (nextSelectedSystemKey !== selectedSystemKey) {
       selectedSystemKey = nextSelectedSystemKey;
       selectedAnchor = state.selected
@@ -813,6 +820,7 @@ export async function attachScene(
           visibility: stableOrbVisibility(String(s.id64 ?? s.name)),
           opacityNoise: stableOrbNoise(String(s.id64 ?? s.name), 0xa17fa9),
           detail: nextDetails[i],
+          selected: nextSelected[i],
         })),
         new THREE.Color(0x2e2e2c),
         { maxPx: 12, additive },
@@ -823,6 +831,7 @@ export async function attachScene(
     if (rebuildOrbs) {
       orbColors = nextColors;
       orbDetails = nextDetails;
+      orbSelected = nextSelected;
       orbDensityWeights = nextDensityWeights;
       orbTheme = theme;
     }
@@ -1073,6 +1082,20 @@ export async function attachScene(
       | { value: number }
       | undefined;
     if (viewDistance) viewDistance.value = d;
+    const orbPlaneY = orbs?.userData.orbPlaneY as
+      | { value: number }
+      | undefined;
+    if (orbPlaneY) orbPlaneY.value = planeY;
+    const orbHasSelection = orbs?.userData.orbHasSelection as
+      | { value: number }
+      | undefined;
+    if (orbHasSelection) orbHasSelection.value = selectedAnchor ? 1 : 0;
+    const orbCameraSide = orbs?.userData.orbCameraSide as
+      | { value: number }
+      | undefined;
+    if (orbCameraSide) {
+      orbCameraSide.value = camera.position.y >= planeY ? 1 : -1;
+    }
     const densityViewDistance = densityField?.userData.orbViewDistance as
       | { value: number }
       | undefined;

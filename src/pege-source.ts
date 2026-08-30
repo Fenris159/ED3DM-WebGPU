@@ -26,7 +26,11 @@ import type {
   PegeWorkerRequest,
   PegeWorkerResponse,
 } from "./pege-protocol";
-import { localEdgeScore, localEdgeWeight } from "./lod";
+import {
+  FULL_DETAIL_CAMERA_DISTANCE_LY,
+  localEdgeScore,
+  localEdgeWeight,
+} from "./lod";
 import { PEGE_OVERVIEW_CONFIG, pegeOverviewCacheId } from "./pege-overview";
 
 function openOverviewCache(): Promise<IDBDatabase | undefined> {
@@ -165,7 +169,7 @@ export function massCodesForView(
               ? 3
               : distance >= 600
                 ? 2
-                : distance >= 180
+                : distance > FULL_DETAIL_CAMERA_DISTANCE_LY
                   ? 1
                   : 0;
   return Array.from(
@@ -195,7 +199,9 @@ export function thresholdForView(
 export function maximumBoxelsForView(
   cameraDistanceLy: number,
 ): number | undefined {
-  return cameraDistanceLy < 180 ? undefined : 2_048;
+  return cameraDistanceLy <= FULL_DETAIL_CAMERA_DISTANCE_LY
+    ? undefined
+    : 2_048;
 }
 
 export function unpackPegeBatch(batch: PackedSystemBatch): System[] {
@@ -323,6 +329,10 @@ export class PegeGalaxySource implements GalaxySource {
     string,
     GalaxySpatialTile & { lastUsed: number }
   >();
+  #spatialCacheScope: string | undefined;
+  #localRegionCache:
+    | { key: string; systems: System[] }
+    | undefined;
   #nextRequestId = 1;
   #tileUseRevision = 0;
 
@@ -676,20 +686,38 @@ export class PegeGalaxySource implements GalaxySource {
       Math.ceil(maximum.y * 32),
       Math.ceil(maximum.z * 32),
     ] as const;
-    const generated = this.#generate(
-      {
-        type: "generate",
-        minimumFixedXyz,
-        maximumExclusiveFixedXyz,
-        massCodes: massCodesForView(request.cameraDistanceLy, request.lod),
-        threshold: thresholdForView(request.cameraDistanceLy, request.lod),
-        // At broader zooms, sample a stable set of real boxels first so a
-        // camera move cannot enqueue hundreds of thousands of full boxels.
-        maximumBoxels: maximumBoxelsForView(request.cameraDistanceLy),
-      },
-      signal,
-      request.detailProgressRange,
-    );
+    const massCodes = massCodesForView(request.cameraDistanceLy, request.lod);
+    const threshold = thresholdForView(request.cameraDistanceLy, request.lod);
+    const maximumBoxels = maximumBoxelsForView(request.cameraDistanceLy);
+    const cacheKey = [
+      minimumFixedXyz.join(","),
+      maximumExclusiveFixedXyz.join(","),
+      massCodes.join(","),
+      threshold,
+      maximumBoxels ?? "all",
+    ].join(":");
+    const cachedSystems = this.#localRegionCache?.key === cacheKey
+      ? this.#localRegionCache.systems
+      : undefined;
+    const generated = cachedSystems
+      ? Promise.resolve({ systems: cachedSystems })
+      : this.#generate(
+          {
+            type: "generate",
+            minimumFixedXyz,
+            maximumExclusiveFixedXyz,
+            massCodes,
+            threshold,
+            // At broader zooms, sample a stable set of real boxels first so a
+            // camera move cannot enqueue hundreds of thousands of full boxels.
+            maximumBoxels,
+          },
+          signal,
+          request.detailProgressRange,
+        ).then((overview) => {
+          this.#localRegionCache = { key: cacheKey, systems: overview.systems };
+          return overview;
+        });
     const radiusSquared = radius * radius;
     if (request.bounds) return generated.then(({ systems }) => systems);
     return generated.then(({ systems }) =>
@@ -699,7 +727,7 @@ export class PegeGalaxySource implements GalaxySource {
         const dz = system.coords.z - request.center.z;
         const distanceSquared = dx * dx + dy * dy + dz * dz;
         if (distanceSquared > radiusSquared) return false;
-        if (request.cameraDistanceLy < 180) return true;
+        if (request.cameraDistanceLy <= FULL_DETAIL_CAMERA_DISTANCE_LY) return true;
         const edgeWeight = localEdgeWeight(
           Math.sqrt(distanceSquared) / radius,
         );
@@ -720,6 +748,13 @@ export class PegeGalaxySource implements GalaxySource {
     signal?: AbortSignal,
   ): Promise<GalaxySpatialTile[]> {
     if (request.keys.length === 0 || request.totalTargetSystems <= 0) return [];
+    if (
+      request.cacheScope !== undefined &&
+      request.cacheScope !== this.#spatialCacheScope
+    ) {
+      this.#spatialTileCache.clear();
+      this.#spatialCacheScope = request.cacheScope;
+    }
     const plan = await this.#post<TilePlan>(
       {
         type: "plan-tiles",
@@ -744,12 +779,24 @@ export class PegeGalaxySource implements GalaxySource {
     const usedCacheKeys = new Set<string>();
     for (const tile of plan) {
       const cacheKey = this.#spatialTileCacheKey(tile);
-      usedCacheKeys.add(cacheKey);
-      const cached = this.#spatialTileCache.get(cacheKey);
+      let cachedKey = cacheKey;
+      let cached = this.#spatialTileCache.get(cacheKey);
+      for (const [candidateKey, candidate] of this.#spatialTileCache) {
+        if (
+          candidate.key === tile.keyString &&
+          candidate.targetSystems >= tile.targetSystems &&
+          (!cached || candidate.targetSystems > cached.targetSystems)
+        ) {
+          cachedKey = candidateKey;
+          cached = candidate;
+        }
+      }
       if (cached) {
+        usedCacheKeys.add(cachedKey);
         cached.lastUsed = ++this.#tileUseRevision;
         resultByKey.set(tile.keyString, cached);
       } else if (tile.targetSystems > 0) {
+        usedCacheKeys.add(cacheKey);
         missing.push(tile);
       } else {
         resultByKey.set(tile.keyString, {
@@ -839,5 +886,7 @@ export class PegeGalaxySource implements GalaxySource {
     }
     this.#pending.clear();
     this.#spatialTileCache.clear();
+    this.#localRegionCache = undefined;
+    this.#spatialCacheScope = undefined;
   }
 }

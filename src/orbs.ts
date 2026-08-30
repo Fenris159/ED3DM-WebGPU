@@ -17,6 +17,7 @@ import InstancedPoints from "three/examples/jsm/objects/InstancedPoints.js";
 import {
   Fn,
   attribute,
+  cameraPosition,
   cameraProjectionMatrix,
   clamp,
   float,
@@ -42,6 +43,7 @@ export type OrbItem = {
   visibility?: number;
   opacityNoise?: number;
   detail?: boolean;
+  selected?: boolean;
 };
 
 export const GALAXY_DENSITY_REFERENCE_SYSTEMS = 400_000_000_000;
@@ -170,6 +172,29 @@ export function layeredOrbOpacity(
   return localPresence * farFieldOrbOpacity(opacityNoise, viewDistance);
 }
 
+export function cameraProximityOpacity(
+  system: { x: number; y: number; z: number },
+  camera: { x: number; y: number; z: number },
+  viewDistance: number,
+  planeY: number,
+  selected: boolean,
+  hasSelection: boolean,
+): number {
+  if (selected) return 1;
+  const cameraSide = camera.y >= planeY ? 1 : -1;
+  const planeBand = Math.max(2, viewDistance * 0.04);
+  const cameraSideHeight = (system.y - planeY) * cameraSide;
+  if (!hasSelection && cameraSideHeight <= planeBand) return 1;
+  const distance = Math.hypot(
+    system.x - camera.x,
+    system.y - camera.y,
+    system.z - camera.z,
+  );
+  const inner = Math.max(2, viewDistance * 0.08);
+  const outer = Math.max(8, viewDistance * 0.3);
+  return 0.02 + 0.98 * smoothstepNumber(inner, outer, distance);
+}
+
 export function projectedOrbDiameter(
   scale: number,
   distance: number,
@@ -224,7 +249,45 @@ function pixelWidthNode(
   })();
 }
 
-function farFieldOpacityNode(uViewDistance: ReturnType<typeof uniform>) {
+function cameraProximityOpacityNode(
+  uViewDistance: ReturnType<typeof uniform>,
+  uPlaneY: ReturnType<typeof uniform>,
+  uHasSelection: ReturnType<typeof uniform>,
+  uCameraSide: ReturnType<typeof uniform>,
+) {
+  const instancePosition = attribute("instancePosition").xyz;
+  const distance = length(instancePosition.sub(cameraPosition));
+  const inner = max(float(2), uViewDistance.mul(0.08));
+  const outer = max(float(8), uViewDistance.mul(0.3));
+  const proximity = mix(
+    float(0.02),
+    float(1),
+    smoothstep(inner, outer, distance),
+  );
+  const cameraSideHeight = instancePosition.y.sub(uPlaneY).mul(uCameraSide);
+  const planeProtection = float(1).sub(
+    smoothstep(
+      max(float(2), uViewDistance.mul(0.04)),
+      max(float(6), uViewDistance.mul(0.12)),
+      cameraSideHeight,
+    ),
+  );
+  const unselectedPlaneProtection = planeProtection.mul(
+    float(1).sub(uHasSelection),
+  );
+  const protection = max(
+    attribute("instanceSelected", "float"),
+    unselectedPlaneProtection,
+  );
+  return mix(proximity, float(1), protection);
+}
+
+function farFieldOpacityNode(
+  uViewDistance: ReturnType<typeof uniform>,
+  uPlaneY: ReturnType<typeof uniform>,
+  uHasSelection: ReturnType<typeof uniform>,
+  uCameraSide: ReturnType<typeof uniform>,
+) {
   const overview = smoothstep(float(10_000), float(100_000), uViewDistance);
   const galaxyOpacity = mix(
     float(0.08),
@@ -245,6 +308,13 @@ function farFieldOpacityNode(uViewDistance: ReturnType<typeof uniform>) {
     localPresence.mul(presentationOpacity),
     float(1),
     attribute("instanceDetail", "float"),
+  ).mul(
+    cameraProximityOpacityNode(
+      uViewDistance,
+      uPlaneY,
+      uHasSelection,
+      uCameraSide,
+    ),
   );
 }
 
@@ -275,6 +345,9 @@ class SoftDiscMaterial extends InstancedPointsNodeMaterial {
     maxPx: number,
     additive: boolean,
     viewDistance: ReturnType<typeof uniform>,
+    planeY: ReturnType<typeof uniform>,
+    hasSelection: ReturnType<typeof uniform>,
+    cameraSide: ReturnType<typeof uniform>,
     density: boolean,
   ) {
     super({
@@ -290,7 +363,7 @@ class SoftDiscMaterial extends InstancedPointsNodeMaterial {
       : pixelWidthNode(maxPx, viewDistance);
     this.opacityNode = density
       ? densityFieldOpacityNode(viewDistance)
-      : farFieldOpacityNode(viewDistance);
+      : farFieldOpacityNode(viewDistance, planeY, hasSelection, cameraSide);
     this.pointColorNode = attribute("instanceColor").mul(
       mix(
         float(0.9),
@@ -335,6 +408,9 @@ function hardDiscMaterial(
   maxPx: number,
   additive: boolean,
   viewDistance: ReturnType<typeof uniform>,
+  planeY: ReturnType<typeof uniform>,
+  hasSelection: ReturnType<typeof uniform>,
+  cameraSide: ReturnType<typeof uniform>,
 ): InstancedPointsNodeMaterial {
   const mat = new InstancedPointsNodeMaterial({
     vertexColors: true,
@@ -345,7 +421,12 @@ function hardDiscMaterial(
   mat.useColor = true;
   mat.alphaToCoverage = false;
   mat.pointWidthNode = pixelWidthNode(maxPx, viewDistance);
-  mat.opacityNode = farFieldOpacityNode(viewDistance);
+  mat.opacityNode = farFieldOpacityNode(
+    viewDistance,
+    planeY,
+    hasSelection,
+    cameraSide,
+  );
   mat.pointColorNode = attribute("instanceColor").mul(
     mix(
       float(0.9),
@@ -366,6 +447,7 @@ function attachPointRaycast(mesh: Mesh) {
     if (!pos) return;
     const details = mesh.userData.orbDetails as Float32Array | undefined;
     const opacityNoise = mesh.userData.orbOpacityNoise as Float32Array | undefined;
+    const selected = mesh.userData.orbSelected as Float32Array | undefined;
     const viewDistance = Number(mesh.userData.orbViewDistance?.value) || 30_000;
     _inverse.copy(mesh.matrixWorld).invert();
     _ray.copy(raycaster.ray).applyMatrix4(_inverse);
@@ -380,6 +462,19 @@ function attachPointRaycast(mesh: Mesh) {
       _pos.fromBufferAttribute(pos, i);
       _world.copy(_pos).applyMatrix4(mesh.matrixWorld);
       const camera = raycaster.camera;
+      if (
+        camera &&
+        cameraProximityOpacity(
+          _world,
+          camera.position,
+          viewDistance,
+          Number(mesh.userData.orbPlaneY?.value) || 0,
+          Boolean(selected?.[i]),
+          Number(mesh.userData.orbHasSelection?.value) > 0,
+        ) < 0.12
+      ) {
+        continue;
+      }
       const threshold =
         camera && "isPerspectiveCamera" in camera && camera.isPerspectiveCamera
           ? orbPickRadiusWorld(
@@ -417,6 +512,7 @@ export function orbCloud(
   const visibility = new Float32Array(items.length);
   const opacityNoise = new Float32Array(items.length);
   const detail = new Float32Array(items.length);
+  const selected = new Float32Array(items.length);
   const cols = new Float32Array(items.length * 3);
   const tint = new Color();
   items.forEach((p, i) => {
@@ -427,6 +523,7 @@ export function orbCloud(
     visibility[i] = p.visibility ?? 1;
     opacityNoise[i] = p.opacityNoise ?? 1;
     detail[i] = p.detail ? 1 : 0;
+    selected[i] = p.selected ? 1 : 0;
     if (p.hex) tint.set(p.hex);
     else tint.copy(color);
     cols[i * 3] = tint.r;
@@ -446,19 +543,37 @@ export function orbCloud(
     new InstancedBufferAttribute(opacityNoise, 1),
   );
   geo.setAttribute("instanceDetail", new InstancedBufferAttribute(detail, 1));
+  geo.setAttribute("instanceSelected", new InstancedBufferAttribute(selected, 1));
   const viewDistance = uniform(30_000);
+  const planeY = uniform(0);
+  const hasSelection = uniform(0);
+  const cameraSide = uniform(1);
   const mat = opts.soft
     ? new SoftDiscMaterial(
         opts.maxPx,
         Boolean(opts.additive),
         viewDistance,
+        planeY,
+        hasSelection,
+        cameraSide,
         Boolean(opts.density),
       )
-    : hardDiscMaterial(opts.maxPx, Boolean(opts.additive), viewDistance);
+    : hardDiscMaterial(
+        opts.maxPx,
+        Boolean(opts.additive),
+        viewDistance,
+        planeY,
+        hasSelection,
+        cameraSide,
+      );
   const mesh = new InstancedPoints(geo, mat);
   mesh.userData.orbViewDistance = viewDistance;
   mesh.userData.orbDetails = detail;
+  mesh.userData.orbSelected = selected;
   mesh.userData.orbOpacityNoise = opacityNoise;
+  mesh.userData.orbPlaneY = planeY;
+  mesh.userData.orbHasSelection = hasSelection;
+  mesh.userData.orbCameraSide = cameraSide;
   mesh.userData.orbViewportHeight = window.innerHeight;
   mesh.frustumCulled = false;
   if (opts.pickable !== false) attachPointRaycast(mesh);

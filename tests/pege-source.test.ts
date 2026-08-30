@@ -254,6 +254,34 @@ describe("PEGE galaxy adapter", () => {
     source.destroy();
   });
 
+  it("reuses the complete local zone while zoom changes inside that zone", async () => {
+    const worker = new FakePegeWorker();
+    const source = new PegeGalaxySource({
+      runtimeUrl: "/pege-runtime.bin?v=1.5.0",
+      worker: worker as unknown as Worker,
+    });
+    const residency = focusedResidencyRegion({ x: 0, y: 0, z: 0 }, 285);
+    const request = (cameraDistanceLy: number): GalaxyRegionRequest => ({
+      center: residency.center,
+      radiusLy: residency.radiusLy,
+      bounds: {
+        minimum: residency.minimum,
+        maximum: residency.maximum,
+      },
+      cameraDistanceLy,
+      lod: "all",
+    });
+    const firstLoad = source.loadRegion(request(285));
+    const generate = worker.messages[1] as { requestId: number };
+    worker.emit({ type: "complete", requestId: generate.requestId });
+    await expect(firstLoad).resolves.toEqual([]);
+    const messagesAfterFirstLoad = worker.messages.length;
+
+    await expect(source.loadRegion(request(42))).resolves.toEqual([]);
+    expect(worker.messages).toHaveLength(messagesAfterFirstLoad);
+    source.destroy();
+  });
+
   it("returns a decoded name location preview on the query worker", async () => {
     const galaxyWorker = new FakePegeWorker();
     const queryWorker = new FakePegeWorker();
@@ -317,7 +345,7 @@ describe("PEGE galaxy adapter", () => {
     source.destroy();
   });
 
-  it("plans, commits, and reuses complete PEGE spatial tiles", async () => {
+  it("reuses the densest complete PEGE spatial tiles within one camera zone", async () => {
     const worker = new FakePegeWorker();
     const source = new PegeGalaxySource({
       runtimeUrl: "/pege-runtime.bin?v=1.5.0",
@@ -337,6 +365,7 @@ describe("PEGE galaxy adapter", () => {
     const firstLoad = source.loadSpatialTiles!({
       keys,
       totalTargetSystems: 3,
+      cacheScope: "h:zone-a",
       keyWeights: [
         { key: keys[0], weight: 1 },
         { key: keys[1], weight: 0.25 },
@@ -386,14 +415,19 @@ describe("PEGE galaxy adapter", () => {
 
     const secondLoad = source.loadSpatialTiles!({
       keys,
-      totalTargetSystems: 3,
+      totalTargetSystems: 2,
+      cacheScope: "h:zone-a",
     });
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     const secondPlanRequest = worker.messages[3] as { requestId: number };
+    const lowerPlan = plan.map((tile) => ({
+      ...tile,
+      targetSystems: 1,
+    }));
     worker.emit({
       type: "tile-plan",
       requestId: secondPlanRequest.requestId,
-      tiles: plan,
+      tiles: lowerPlan,
     });
     expect(await secondLoad).toEqual(first);
     expect(
@@ -524,7 +558,8 @@ describe("PEGE galaxy adapter", () => {
 
   it("bounds PEGE boxel generation without lowering the requested System sample", () => {
     expect(maximumBoxelsForView(100)).toBeUndefined();
-    expect(maximumBoxelsForView(180)).toBe(2_048);
+    expect(maximumBoxelsForView(180)).toBeUndefined();
+    expect(maximumBoxelsForView(301)).toBe(2_048);
     expect(maximumBoxelsForView(6_000)).toBe(2_048);
     expect(boundedLocalSamplePlan(2_000, 4_096, 0.03)).toEqual({
       boxelThreshold: 1,
@@ -541,11 +576,14 @@ describe("PEGE galaxy adapter", () => {
     expect(massCodesForView(40_000, 50)).toEqual([7]);
     expect(massCodesForView(40_000, 100)).toEqual([7]);
     expect(massCodesForView(100, 0)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+    expect(massCodesForView(285, "all")).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
     expect(massCodesForView(40_000, "all")).toEqual([7]);
     expect(thresholdForView(40_000, 0)).toBeCloseTo(0.0000001);
     expect(thresholdForView(40_000, 20)).toBeCloseTo(0.000000136);
     expect(thresholdForView(100, 0)).toBe(1);
     expect(thresholdForView(100, "all")).toBe(1);
+    expect(thresholdForView(285, "all")).toBe(1);
+    expect(maximumBoxelsForView(285)).toBeUndefined();
     expect(thresholdForView(500, "all")).toBeCloseTo(0.03);
     expect(thresholdForView(1_000, "all")).toBeCloseTo(0.003);
     expect(thresholdForView(3_000, "all")).toBeCloseTo(0.0003);
@@ -950,10 +988,10 @@ describe("PEGE galaxy adapter", () => {
     expect(source.destroy).toHaveBeenCalledOnce();
   });
 
-  it("rounds exact-local residency down so the first factual cluster stays responsive", () => {
+  it("keeps one complete local cache zone stable throughout the closest zoom range", () => {
     const near = focusedResidencyRegion({ x: 0, y: 0, z: 0 }, 58);
-    expect(near.maximum.x - near.minimum.x).toBe(40);
-    const boundary = focusedResidencyRegion({ x: 0, y: 0, z: 0 }, 179);
-    expect(boundary.maximum.x - boundary.minimum.x).toBe(160);
+    const threshold = focusedResidencyRegion({ x: 0, y: 0, z: 0 }, 285);
+    expect(near.maximum.x - near.minimum.x).toBe(640);
+    expect(threshold.key).toBe(near.key);
   });
 });

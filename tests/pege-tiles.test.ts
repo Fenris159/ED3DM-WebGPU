@@ -2,6 +2,7 @@ import { galaxyViewTileKeyString } from "pege";
 import { describe, expect, it } from "vitest";
 import {
   MAX_VISIBLE_PEGE_TILES,
+  cameraViewResidencyTilePlan,
   cameraResidencyTileKeys,
   cameraResidencyTilePlan,
   focusedPegeTileKey,
@@ -114,7 +115,7 @@ describe("PEGE spatial tile view", () => {
 
   it("uses zoom and LOD for a bounded tile-local point budget", () => {
     expect(pegeTilePointBudget(100, "all", 8)).toBeGreaterThan(0);
-    expect(pegeTilePointBudget(100, "all", 8)).toBeLessThan(
+    expect(pegeTilePointBudget(100, "all", 8)).toBeGreaterThanOrEqual(
       pegeTilePointBudget(500, "all", 8),
     );
     expect(pegeTilePointBudget(500, 10, 8)).toBe(6_000);
@@ -123,7 +124,26 @@ describe("PEGE spatial tile view", () => {
     expect(pegeTilePointBudget(30_000, 0, 4)).toBe(500);
     const plan = cameraResidencyTilePlan({ x: 0, y: 0, z: 0 });
     expect(taperedPegeTilePointBudget(500, 10, plan)).toBe(716);
-    expect(taperedPegeTilePointBudget(8_000, "all", plan)).toBe(0);
+    expect(taperedPegeTilePointBudget(8_000, "all", plan)).toBeGreaterThan(0);
+    expect(taperedPegeTilePointBudget(10_000, "all", plan)).toBe(0);
     expect(taperedPegeTilePointBudget(90_000, 10, plan)).toBe(0);
+  });
+
+  it("pads residency around the camera-visible window instead of exposing its edge", () => {
+    const plan = cameraViewResidencyTilePlan({
+      target: { x: 635, y: 635, z: 635 },
+      position: { x: 635, y: -42, z: 650 },
+      direction: { x: 0, y: 1, z: 0 },
+      distanceLy: 677,
+      verticalFovDegrees: 50,
+      aspect: 1.6,
+      visibleBounds: {
+        minimum: { x: -700, y: -700, z: -700 },
+        maximum: { x: 1_970, y: 1_970, z: 1_970 },
+      },
+    });
+    expect(plan.length).toBeGreaterThan(1);
+    expect(plan.some(({ weight }) => weight < 1)).toBe(true);
+    expect(plan.length).toBeLessThanOrEqual(MAX_VISIBLE_PEGE_TILES);
   });
 });

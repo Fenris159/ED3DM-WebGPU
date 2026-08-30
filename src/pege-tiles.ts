@@ -5,6 +5,7 @@ import {
 import { PEGE_OVERVIEW_CONFIG } from "./pege-overview";
 import { containingBoxel } from "./boxel";
 import type {
+  GalaxyCameraView,
   GalaxyViewBounds,
   LodSetting,
   PegeSpatialTileKey,
@@ -12,6 +13,7 @@ import type {
 
 const FIXED_UNITS_PER_LY = 32;
 export const MAX_VISIBLE_PEGE_TILES = 64;
+export const LOCAL_DETAIL_MAX_DISTANCE_LY = 10_000;
 const H_NEIGHBORHOOD_TILE_COUNT = 27;
 const H_BOUNDARY_BLEND_FRACTION = 0.3;
 export const pegeTileKeyString = galaxyViewTileKeyString;
@@ -95,12 +97,77 @@ export function cameraResidencyTilePlan(
   });
 }
 
+export function cameraResidencyCacheScope(
+  target: { x: number; y: number; z: number },
+): string {
+  const h = containingBoxel(target, "h");
+  return `h:${h.ox}:${h.oy}:${h.oz}`;
+}
+
+export function cameraViewResidencyTilePlan(
+  view: GalaxyCameraView,
+): { key: PegeSpatialTileKey; weight: number }[] {
+  const padding = {
+    x: Math.max(
+      1_280,
+      (view.visibleBounds.maximum.x - view.visibleBounds.minimum.x) * 0.45,
+    ),
+    y: Math.max(
+      1_280,
+      (view.visibleBounds.maximum.y - view.visibleBounds.minimum.y) * 0.45,
+    ),
+    z: Math.max(
+      1_280,
+      (view.visibleBounds.maximum.z - view.visibleBounds.minimum.z) * 0.45,
+    ),
+  };
+  const paddedBounds: GalaxyViewBounds = {
+    minimum: {
+      x: view.visibleBounds.minimum.x - padding.x,
+      y: view.visibleBounds.minimum.y - padding.y,
+      z: view.visibleBounds.minimum.z - padding.z,
+    },
+    maximum: {
+      x: view.visibleBounds.maximum.x + padding.x,
+      y: view.visibleBounds.maximum.y + padding.y,
+      z: view.visibleBounds.maximum.z + padding.z,
+    },
+  };
+  const keys = visiblePegeTileKeys(
+    paddedBounds,
+    view.distanceLy,
+    MAX_VISIBLE_PEGE_TILES,
+  );
+  if (keys.length === 0) return cameraResidencyTilePlan(view.target);
+  return keys.map((key) => {
+    const edgeLy =
+      (GALAXY_VIEW_TILE_EDGE_FIXED * 2 ** key.level) / FIXED_UNITS_PER_LY;
+    const center = {
+      x: (key.x + 0.5) * edgeLy,
+      y: (key.y + 0.5) * edgeLy,
+      z: (key.z + 0.5) * edgeLy,
+    };
+    const outside = (axis: "x" | "y" | "z") =>
+      center[axis] < view.visibleBounds.minimum[axis]
+        ? (view.visibleBounds.minimum[axis] - center[axis]) / padding[axis]
+        : center[axis] > view.visibleBounds.maximum[axis]
+          ? (center[axis] - view.visibleBounds.maximum[axis]) / padding[axis]
+          : 0;
+    const edgeDistance = Math.min(
+      1,
+      Math.max(outside("x"), outside("y"), outside("z")),
+    );
+    const smooth = edgeDistance * edgeDistance * (3 - 2 * edgeDistance);
+    return { key, weight: 1 - 0.88 * smooth };
+  });
+}
+
 export function taperedPegeTilePointBudget(
   cameraDistanceLy: number,
   lod: LodSetting,
   keyWeights: readonly { weight: number }[],
 ): number {
-  if (cameraDistanceLy >= 8_000) return 0;
+  if (cameraDistanceLy >= LOCAL_DETAIL_MAX_DISTANCE_LY) return 0;
   const fullBudget = pegeTilePointBudget(
     cameraDistanceLy,
     lod,
@@ -108,10 +175,13 @@ export function taperedPegeTilePointBudget(
   );
   if (fullBudget === 0 || keyWeights.length === 0) return 0;
   const neighborhoodFraction =
-    keyWeights.reduce(
-      (total, { weight }) => total + Math.min(1, Math.max(0, weight)),
-      0,
-    ) / H_NEIGHBORHOOD_TILE_COUNT;
+    Math.min(
+      1,
+      keyWeights.reduce(
+        (total, { weight }) => total + Math.min(1, Math.max(0, weight)),
+        0,
+      ) / H_NEIGHBORHOOD_TILE_COUNT,
+    );
   return Math.max(
     keyWeights.length,
     Math.ceil(fullBudget * neighborhoodFraction),
@@ -245,9 +315,7 @@ export function pegeTilePointBudget(
 ): number {
   if (tileCount <= 0) return 0;
   const maximum =
-    cameraDistanceLy < 180
-      ? 30_000
-      : cameraDistanceLy < 600
+    cameraDistanceLy < 600
       ? 60_000
       : cameraDistanceLy < 1_600
         ? 50_000
