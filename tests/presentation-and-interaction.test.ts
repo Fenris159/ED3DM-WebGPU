@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ED3DM } from "../src/index";
 import {
   cameraProximityOpacity,
+  focusedOrbDiameterCap,
   minimumOrbDiameter,
   farFieldOrbOpacity,
   layeredOrbOpacity,
@@ -34,6 +35,7 @@ import type { GalaxyRegionRequest, GalaxySource, System } from "../src/types";
 describe("galaxy presentation and interaction regressions", () => {
   it("fades and click-masks camera-side foreground stars without hiding the target plane", () => {
     const camera = { x: 0, y: 100, z: 0 };
+    const target = { x: 0, y: 0, z: 0 };
     expect(
       cameraProximityOpacity(
         { x: 0, y: 92, z: 0 },
@@ -42,6 +44,7 @@ describe("galaxy presentation and interaction regressions", () => {
         0,
         false,
         false,
+        target,
       ),
     ).toBeLessThan(0.1);
     expect(
@@ -52,6 +55,7 @@ describe("galaxy presentation and interaction regressions", () => {
         0,
         false,
         false,
+        target,
       ),
     ).toBe(1);
     expect(
@@ -62,8 +66,55 @@ describe("galaxy presentation and interaction regressions", () => {
         0,
         true,
         true,
+        target,
       ),
     ).toBe(1);
+    expect(
+      cameraProximityOpacity(
+        { x: 0, y: 50, z: 0 },
+        camera,
+        100,
+        0,
+        false,
+        true,
+        target,
+      ),
+    ).toBeLessThan(0.02);
+    expect(
+      cameraProximityOpacity(
+        { x: 0, y: -10, z: 0 },
+        camera,
+        100,
+        0,
+        false,
+        true,
+        target,
+      ),
+    ).toBe(1);
+    expect(
+      cameraProximityOpacity(
+        { x: 20, y: 50, z: 0 },
+        camera,
+        100,
+        0,
+        false,
+        true,
+        target,
+      ),
+    ).toBe(1);
+  });
+
+  it("grows selected and connected orbs only past 85% zoom with camera-depth perspective", () => {
+    expect(focusedOrbDiameterCap(100, 100, true)).toBe(12);
+    expect(focusedOrbDiameterCap(58, 58, true)).toBeGreaterThan(12);
+    expect(focusedOrbDiameterCap(58, 40, true)).toBeGreaterThan(
+      focusedOrbDiameterCap(58, 58, true),
+    );
+    expect(focusedOrbDiameterCap(58, 80, true)).toBeLessThan(
+      focusedOrbDiameterCap(58, 58, true),
+    );
+    expect(focusedOrbDiameterCap(20, 20, true)).toBeLessThanOrEqual(19);
+    expect(focusedOrbDiameterCap(20, 20, false)).toBe(12);
   });
 
   function luminance(hex: string): number {

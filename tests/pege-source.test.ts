@@ -899,7 +899,10 @@ describe("PEGE galaxy adapter", () => {
     let regionCall = 0;
     const source: GalaxySource = {
       loadOverview: vi.fn(async () => ({ systems: [overview] })),
-      loadRegion: vi.fn(() => {
+      loadRegion: vi.fn((request: GalaxyRegionRequest) => {
+        if (request.cameraDistanceLy === 50 && request.lod === "all") {
+          return Promise.resolve([oldLocal]);
+        }
         regionCall += 1;
         if (regionCall === 1) return Promise.resolve([oldLocal]);
         return new Promise<System[]>((resolve) => {
@@ -1162,7 +1165,10 @@ describe("PEGE galaxy adapter", () => {
     let calls = 0;
     const source: GalaxySource = {
       loadOverview: vi.fn(async () => ({ systems: [] })),
-      loadRegion: vi.fn(() => {
+      loadRegion: vi.fn((request: GalaxyRegionRequest) => {
+        if (request.cameraDistanceLy === 50 && request.lod === "all") {
+          return Promise.resolve([target, firstNeighbor]);
+        }
         calls += 1;
         if (calls === 1) return Promise.resolve([target, firstNeighbor]);
         return new Promise<System[]>((resolve) => { finishLod = resolve; });
@@ -1176,6 +1182,7 @@ describe("PEGE galaxy adapter", () => {
     const map = await ED3DM.create({ container: document.body, source, lod: 10 });
     await map.flyTo(target.name);
     await vi.waitFor(() => expect(map.visibleSystems()).toContain(firstNeighbor));
+    map.clearSelection();
 
     const changing = map.setLod(50);
     await Promise.resolve();
@@ -1224,7 +1231,7 @@ describe("PEGE galaxy adapter", () => {
     await map.flyTo("Sol");
     const distance = Math.hypot(22, 14, 52);
     const residency = focusedResidencyRegion({ x: 0, y: 0, z: 0 }, distance);
-    expect(loadRegion).toHaveBeenLastCalledWith(
+    expect(loadRegion).toHaveBeenCalledWith(
       expect.objectContaining({
         center: residency.center,
         radiusLy: residency.radiusLy,

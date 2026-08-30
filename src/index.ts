@@ -19,7 +19,11 @@ import type {
   VisualTheme,
 } from "./types";
 import { colorFor } from "./palettes";
-import { attachScene, cameraZoomPercent, type SceneHandle } from "./scene";
+import {
+  attachScene,
+  cameraZoomPercent,
+  type SceneHandle,
+} from "./scene";
 import {
   LOCAL_DETAIL_MAX_DISTANCE_LY,
   cameraResidencyAnchor,
@@ -128,14 +132,17 @@ export const ED3DM = {
     let cameraDistanceLy = 30_000;
     let sourceOverviewSystems: System[] = [];
     let sourceLocalSystems: System[] = [];
+    let sourceSelectionSystems: System[] = [];
     let sourceSpatialTiles: GalaxySpatialTile[] = [];
     let sourceOverviewRequest: AbortController | undefined;
     let sourceLocalRequest: AbortController | undefined;
     let sourceLocalRequestKey: string | undefined;
     let sourceSpatialRequest: AbortController | undefined;
+    let sourceSelectionRequest: AbortController | undefined;
     let sourceSpatialRequestKey: string | undefined;
     let committedSpatialRequestKey: string | undefined;
     let committedLocalRequestKey: string | undefined;
+    let committedSelectionRequestKey: string | undefined;
     let selected: System | undefined;
     let flyRevision = 0;
     let colorBy: ColorByMode = "none";
@@ -434,6 +441,76 @@ export const ED3DM = {
       unloadExcept(keep);
     }
 
+    async function ensureSelectionNeighbors(
+      system: System,
+      revision: number,
+    ): Promise<boolean> {
+      if (!source) return false;
+      const requestKey = systemKey(system);
+      if (committedSelectionRequestKey === requestKey) return true;
+      sourceSelectionRequest?.abort();
+      const controller = new AbortController();
+      const activityRevision = ++detailActivityRevision;
+      detailActivity += 1;
+      sourceSelectionRequest = controller;
+      try {
+        for (const halfExtent of [10, 40, 80, 200]) {
+          const { x, y, z } = system.coords;
+          const loaded = await source.loadRegion(
+            {
+              center: system.coords,
+              radiusLy: halfExtent * Math.sqrt(3),
+              bounds: {
+                minimum: {
+                  x: x - halfExtent,
+                  y: y - halfExtent,
+                  z: z - halfExtent,
+                },
+                maximum: {
+                  x: x + halfExtent,
+                  y: y + halfExtent,
+                  z: z + halfExtent,
+                },
+              },
+              cameraDistanceLy: Math.min(50, FULL_DETAIL_CAMERA_DISTANCE_LY),
+              lod: "all",
+              detailProgressRange: { start: 0, end: 1 },
+            },
+            controller.signal,
+          );
+          if (
+            controller.signal.aborted ||
+            revision !== flyRevision ||
+            systemKey(selected ?? system) !== requestKey
+          ) return false;
+          const neighbors = selectionNeighborCandidates(loaded, system);
+          sourceSelectionSystems = [system, ...neighbors];
+          paint();
+          if (neighbors.length >= 5) break;
+        }
+        committedSelectionRequestKey = requestKey;
+        return true;
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === "AbortError")) {
+          throw error;
+        }
+        return false;
+      } finally {
+        detailActivity -= 1;
+        void notifyDetailRenderedWhenIdle(activityRevision);
+        if (sourceSelectionRequest === controller) {
+          sourceSelectionRequest = undefined;
+        }
+      }
+    }
+
+    function clearSelectionNeighbors() {
+      sourceSelectionRequest?.abort();
+      sourceSelectionRequest = undefined;
+      sourceSelectionSystems = [];
+      committedSelectionRequestKey = undefined;
+    }
+
     if (source?.loadOverview) {
       sourceOverviewRequest = new AbortController();
       const loadedOverview = await source.loadOverview(
@@ -455,6 +532,43 @@ export const ED3DM = {
       return system.id64 === undefined
         ? `${system.name}\0${system.coords.x}\0${system.coords.y}\0${system.coords.z}`
         : String(system.id64);
+    }
+
+    function selectionNeighborCandidates(
+      systems: readonly System[],
+      system: System,
+      maximum = 5,
+      maximumDistanceLy = 200,
+    ): System[] {
+      const identity = systemKey(system);
+      const maximumDistanceSquared = maximumDistanceLy * maximumDistanceLy;
+      const candidates = new Map<
+        string,
+        { system: System; distanceSquared: number }
+      >();
+      for (const candidate of systems) {
+        const key = systemKey(candidate);
+        if (key === identity) continue;
+        const distanceSquared =
+          (candidate.coords.x - system.coords.x) ** 2 +
+          (candidate.coords.y - system.coords.y) ** 2 +
+          (candidate.coords.z - system.coords.z) ** 2;
+        if (distanceSquared <= 0 || distanceSquared > maximumDistanceSquared) {
+          continue;
+        }
+        const current = candidates.get(key);
+        if (!current || distanceSquared < current.distanceSquared) {
+          candidates.set(key, { system: candidate, distanceSquared });
+        }
+      }
+      return [...candidates.values()]
+        .sort(
+          (left, right) =>
+            left.distanceSquared - right.distanceSquared ||
+            systemKey(left.system).localeCompare(systemKey(right.system)),
+        )
+        .slice(0, maximum)
+        .map(({ system: candidate }) => candidate);
     }
 
     function mergeSpatialTiles(
@@ -484,6 +598,9 @@ export const ED3DM = {
         }
       }
       for (const system of sourceLocalSystems) {
+        merged.set(systemKey(system), system);
+      }
+      for (const system of sourceSelectionSystems) {
         merged.set(systemKey(system), system);
       }
       if (selected) merged.set(systemKey(selected), selected);
@@ -552,6 +669,11 @@ export const ED3DM = {
         }
       }
       for (const system of sourceLocalSystems) {
+        const key = systemKey(system);
+        detailKeys.add(key);
+        densityWeights.set(key, 0);
+      }
+      for (const system of sourceSelectionSystems) {
         const key = systemKey(system);
         detailKeys.add(key);
         densityWeights.set(key, 0);
@@ -678,6 +800,7 @@ export const ED3DM = {
             Math.hypot(22, 14, 52),
           );
           selected = sys;
+          void ensureSelectionNeighbors(sys, revision).catch(reportDetailLoadError);
           options.onSystemClick?.(sys);
           scene?.flyCamera(sys.coords);
           paint();
@@ -758,6 +881,7 @@ export const ED3DM = {
       },
       clearSelection() {
         flyRevision += 1;
+        clearSelectionNeighbors();
         selected = undefined;
         options.onSystemClick?.(undefined);
         paint();
@@ -767,6 +891,7 @@ export const ED3DM = {
         if (viewIdleTimer !== undefined) clearTimeout(viewIdleTimer);
         sourceOverviewRequest?.abort();
         abortSourceDetailRequests();
+        clearSelectionNeighbors();
         source?.destroy();
         scene?.destroy();
         scene = undefined;
@@ -774,6 +899,7 @@ export const ED3DM = {
         loaded.clear();
         tileCache.clear();
         sourceSpatialTiles = [];
+        sourceSelectionSystems = [];
         selected = undefined;
       },
       loadedTiles() {
@@ -836,6 +962,7 @@ export const ED3DM = {
             if (!sys) return;
             const revision = ++flyRevision;
             selected = sys;
+            void ensureSelectionNeighbors(sys, revision).catch(reportDetailLoadError);
             options.onSystemClick?.(sys);
             scene?.flyCamera(sys.coords);
             paint();
@@ -865,6 +992,7 @@ export const ED3DM = {
           },
           onPickCell(coords) {
             if (selected) {
+              clearSelectionNeighbors();
               selected = undefined;
               options.onSystemClick?.(undefined);
               paint();

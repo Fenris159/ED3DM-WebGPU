@@ -475,6 +475,7 @@ export async function attachScene(
   let orbColors: (string | undefined)[] = [];
   let orbDetails: boolean[] = [];
   let orbSelected: boolean[] = [];
+  let orbFocused: boolean[] = [];
   let orbDensityWeights: number[] = [];
   let orbTheme: VisualTheme | undefined;
   let lines: THREE.LineSegments | undefined;
@@ -727,6 +728,15 @@ export async function attachScene(
     const nextDensityWeights = state.systems.map((_, index) =>
       Math.min(1, Math.max(0, state.densityWeights?.[index] ?? 0)),
     );
+    const nextSelectionRails = selectionRailIndexes(
+      state.systems,
+      state.selected,
+      nextDetails,
+    );
+    const focusedIndexes = new Set(nextSelectionRails);
+    const nextFocused = nextSelected.map(
+      (isSelected, index) => isSelected || focusedIndexes.has(index),
+    );
     const rebuildOrbs =
       orbTheme !== (state.theme ?? theme) ||
       state.systems.length !== systems.length ||
@@ -736,6 +746,7 @@ export async function attachScene(
           nextColors[index] !== orbColors[index] ||
           nextDetails[index] !== orbDetails[index] ||
           nextSelected[index] !== orbSelected[index] ||
+          nextFocused[index] !== orbFocused[index] ||
           nextDensityWeights[index] !== orbDensityWeights[index],
       );
     systems = state.systems;
@@ -821,6 +832,7 @@ export async function attachScene(
           opacityNoise: stableOrbNoise(String(s.id64 ?? s.name), 0xa17fa9),
           detail: nextDetails[i],
           selected: nextSelected[i],
+          focused: nextFocused[i],
         })),
         new THREE.Color(0x2e2e2c),
         { maxPx: 12, additive },
@@ -832,6 +844,7 @@ export async function attachScene(
       orbColors = nextColors;
       orbDetails = nextDetails;
       orbSelected = nextSelected;
+      orbFocused = nextFocused;
       orbDensityWeights = nextDensityWeights;
       orbTheme = theme;
     }
@@ -869,11 +882,7 @@ export async function attachScene(
         scene.add(routesLine);
       }
     }
-    selectionRails = selectionRailIndexes(
-      state.systems,
-      state.selected,
-      nextDetails,
-    );
+    selectionRails = nextSelectionRails;
     if (state.selected && selectionRails.length) {
       const origin = state.selected.coords;
       const verts: number[] = [];
@@ -1095,6 +1104,12 @@ export async function attachScene(
       | undefined;
     if (orbCameraSide) {
       orbCameraSide.value = camera.position.y >= planeY ? 1 : -1;
+    }
+    const orbViewTarget = orbs?.userData.orbViewTarget as
+      | { value: THREE.Vector3 }
+      | undefined;
+    if (orbViewTarget) {
+      orbViewTarget.value.copy(selectedAnchor ?? controls.target);
     }
     const densityViewDistance = densityField?.userData.orbViewDistance as
       | { value: number }
