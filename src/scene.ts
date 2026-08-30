@@ -3,85 +3,127 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import {
   boxelGridWorld,
   boxelSize,
-  clampMassCode,
+  effectiveBoxelMassCode,
   finestMassCode,
   boxelWindowForView,
   MAX_BOXEL_FLOATS,
   type BoxelWindow,
   type MassCode,
 } from "./boxel";
-import { orbCloud } from "./orbs";
+import { orbCloud, stableOrbNoise, stableOrbVisibility } from "./orbs";
 import { orbScale } from "./palettes";
 import { makeRegionLayerAsync, tintRegionLayer } from "./region-labels";
-import { GALAXY_CORE, GALAXY_RADIUS } from "./regions";
-import type { CatalogCell, Route, System, VisualTheme } from "./types";
+import { GALAXY_CORE } from "./regions";
+import type { GalaxyCameraView, Route, System, VisualTheme } from "./types";
 import { drawViewGizmo } from "./view-gizmo";
 
 const PAPER = 0xeaeae8;
 const CHARCOAL = 0x1c1c1b;
 const SPACE = 0x07060c;
-const SPECTRAL = [
-  "#9bb0ff",
-  "#c5d4ff",
-  "#f4f1ff",
-  "#fff4ea",
-  "#ffd27a",
-  "#ff9a4a",
-  "#ff6848",
-];
 
+export function selectionRingScale(viewDistance: number): number {
+  return Math.max(1.2, viewDistance * 0.018);
+}
+export function selectionPlaneHeight(
+  currentPlaneY: number,
+  selected: { x: number; y: number; z: number } | undefined,
+): number {
+  return selected?.y ?? currentPlaneY;
+}
+
+function systemIdentity(system: System): string {
+  return String(system.id64 ?? `${system.name}\0${system.coords.x}\0${system.coords.y}\0${system.coords.z}`);
+}
+
+export function selectionRailIndexes(
+  systems: readonly System[],
+  selected: System | undefined,
+  eligible?: readonly boolean[],
+  maximumNeighbors = 5,
+  maximumDistanceLy = 200,
+): number[] {
+  if (!selected) return [];
+  const selectedIdentity = systemIdentity(selected);
+  const maximumDistanceSquared = maximumDistanceLy * maximumDistanceLy;
+  return systems
+    .map((system, index) => ({
+      system,
+      index,
+      distanceSquared:
+        (system.coords.x - selected.coords.x) ** 2 +
+        (system.coords.y - selected.coords.y) ** 2 +
+        (system.coords.z - selected.coords.z) ** 2,
+    }))
+    .filter(
+      ({ system, index, distanceSquared }) =>
+        systemIdentity(system) !== selectedIdentity &&
+        (eligible?.[index] ?? true) &&
+        distanceSquared > 0 &&
+        distanceSquared <= maximumDistanceSquared,
+    )
+    .sort((left, right) =>
+      left.distanceSquared - right.distanceSquared || left.index - right.index,
+    )
+    .slice(0, Math.max(0, maximumNeighbors))
+    .map(({ index }) => index);
+}
+
+export function railSelectableIndex(
+  candidateIndex: number,
+  railIndexes: readonly number[],
+  hasSelection: boolean,
+): boolean {
+  return !hasSelection || railIndexes.includes(candidateIndex);
+}
+export function cameraAnchorTarget(
+  selected: { x: number; y: number; z: number } | undefined,
+  _planeY: number,
+): { x: number; y: number; z: number } | undefined {
+  return selected ? { ...selected } : undefined;
+}
+export function cameraAnchorAfterPlanePanStart(
+  _selected: { x: number; y: number; z: number } | undefined,
+): undefined {
+  return undefined;
+}
+export function isPrimaryClickGesture(
+  button: number,
+  startX: number,
+  startY: number,
+  endX: number,
+  endY: number,
+  maximumMovementPx = 5,
+): boolean {
+  if (button !== 0) return false;
+  return Math.hypot(endX - startX, endY - startY) <= maximumMovementPx;
+}
+export function cameraCruiseProgress(elapsedMs: number, durationMs = 650): number {
+  const linear = Math.min(1, Math.max(0, elapsedMs / Math.max(1, durationMs)));
+  return 1 - (1 - linear) ** 3;
+}
+export function regionLabelsVisible(viewDistanceLy: number): boolean {
+  return viewDistanceLy >= 2_000;
+}
 export type SceneHandle = {
   sync: (state: {
-    cells: CatalogCell[];
     systems: System[];
     colors?: string[];
+    details?: boolean[];
+    densityWeights?: number[];
     selected?: System;
-    hideImpostors?: boolean;
-    loadedCellIds?: Set<string>;
     routes?: Route[];
     grid?: boolean;
     regionGrid?: boolean;
-    backdrop?: boolean;
     theme?: VisualTheme;
   }) => void;
   flyCamera: (target: { x: number; y: number; z: number }) => void;
   setPlaneHeight: (y: number) => void;
   planeHeight: () => number;
   setMassCode: (code: MassCode) => void;
-  setTheme: (theme: VisualTheme) => void;
   resetTopView: () => void;
+  viewState: () => GalaxyCameraView;
   destroy: () => void;
 };
-
-function hash01(i: number, seed: number): number {
-  const n = Math.sin(i * 12.9898 + seed * 78.233) * 43758.5453;
-  return n - Math.floor(n);
-}
-
-const PAPER_GRAYS = ["#1c1c1b", "#2e2e2c", "#4a4a46", "#6a6a64", "#8a8a84"];
-
-function impostorOrbs(
-  cells: CatalogCell[],
-  skipIds?: Set<string>,
-): { x: number; y: number; z: number; r: number; hex: string }[] {
-  const out: { x: number; y: number; z: number; r: number; hex: string }[] = [];
-  for (const cell of cells) {
-    if (skipIds?.has(cell.id)) continue;
-    const n = Math.min(cell.count, 30);
-    const seed = cell.id.length + cell.cx + cell.cz;
-    const r = Math.min(400, Math.max(120, cell.size * 0.18));
-    for (let i = 0; i < n; i++) {
-      out.push({
-        x: cell.cx + (hash01(i, seed) - 0.5) * cell.size,
-        y: cell.cy + (hash01(i + 17, seed) - 0.5) * cell.size * 0.12,
-        z: cell.cz + (hash01(i + 31, seed) - 0.5) * cell.size,
-        r,
-        hex: PAPER_GRAYS[Math.floor(hash01(i, seed + 7) * PAPER_GRAYS.length)]!,
-      });
-    }
-  }
-  return out;
-}
 
 function regionGridColor(visual: VisualTheme): number {
   if (visual === "paper") return 0x2a2a28;
@@ -142,7 +184,9 @@ export async function attachScene(
   handlers: {
     onSelectSystem: (index: number) => void;
     onPickCell: (coords: { x: number; y: number; z: number }) => void;
-    onViewIdle?: (coords: { x: number; y: number; z: number }, distance: number) => void;
+    initialTheme?: VisualTheme;
+    onViewChange?: (view: GalaxyCameraView) => void;
+    onViewIdle?: (view: GalaxyCameraView) => void;
     onPlaneHeight?: (y: number) => void;
     onMassCode?: (code: MassCode, finest: MassCode) => void;
     viewCompass?: HTMLCanvasElement;
@@ -156,8 +200,11 @@ export async function attachScene(
   container.style.position = container.style.position || "relative";
   container.appendChild(canvas);
 
+  const initialTheme = handlers.initialTheme ?? "realistic";
+  const initialBackground =
+    initialTheme === "paper" ? PAPER : initialTheme === "charcoal" ? CHARCOAL : SPACE;
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(PAPER);
+  scene.background = new THREE.Color(initialBackground);
 
   const camera = new THREE.PerspectiveCamera(
     50,
@@ -165,7 +212,7 @@ export async function attachScene(
     0.5,
     250000,
   );
-  camera.position.set(GALAXY_CORE.x - 8000, 22000, GALAXY_CORE.z - 18000);
+  camera.position.set(GALAXY_CORE.x, 90_000, GALAXY_CORE.z - 3_600);
 
   const renderer = new THREE.WebGPURenderer({
     canvas,
@@ -174,10 +221,11 @@ export async function attachScene(
   });
   await renderer.init();
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.setClearColor(PAPER, 1);
+  renderer.setClearColor(initialBackground, 1);
   renderer.setSize(container.clientWidth || 800, container.clientHeight || 600);
 
   const controls = new OrbitControls(camera, canvas);
+  let planeY = 0;
   controls.enableDamping = true;
   controls.dampingFactor = 0.3;
   controls.rotateSpeed = 0.3;
@@ -192,85 +240,130 @@ export async function attachScene(
   controls.mouseButtons.MIDDLE = THREE.MOUSE.DOLLY;
   controls.mouseButtons.RIGHT = THREE.MOUSE.PAN;
   controls.target.set(GALAXY_CORE.x, 0, GALAXY_CORE.z);
+
+  function currentViewState(): GalaxyCameraView {
+    camera.updateMatrixWorld();
+    const distanceLy = controls.getDistance();
+    const direction = camera.getWorldDirection(new THREE.Vector3()).normalize();
+    const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0).normalize();
+    const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1).normalize();
+    const nearDistance = Math.max(camera.near, Math.min(1_280, distanceLy * 0.05));
+    const farDistance = Math.min(200_000, Math.max(2_560, distanceLy * 2.25));
+    const verticalTangent = Math.tan((camera.fov * Math.PI) / 360);
+    const bounds = new THREE.Box3();
+    for (const depth of [nearDistance, farDistance]) {
+      const center = camera.position.clone().addScaledVector(direction, depth);
+      const halfHeight = verticalTangent * depth;
+      const halfWidth = halfHeight * camera.aspect;
+      for (const horizontal of [-1, 1]) {
+        for (const vertical of [-1, 1]) {
+          bounds.expandByPoint(
+            center
+              .clone()
+              .addScaledVector(right, horizontal * halfWidth)
+              .addScaledVector(up, vertical * halfHeight),
+          );
+        }
+      }
+    }
+    bounds.expandByPoint(camera.position);
+    bounds.expandByPoint(controls.target);
+    return {
+      target: {
+        x: controls.target.x,
+        y: controls.target.y,
+        z: controls.target.z,
+      },
+      position: {
+        x: camera.position.x,
+        y: camera.position.y,
+        z: camera.position.z,
+      },
+      direction: { x: direction.x, y: direction.y, z: direction.z },
+      distanceLy,
+      verticalFovDegrees: camera.fov,
+      aspect: camera.aspect,
+      visibleBounds: {
+        minimum: { x: bounds.min.x, y: bounds.min.y, z: bounds.min.z },
+        maximum: { x: bounds.max.x, y: bounds.max.y, z: bounds.max.z },
+      },
+    };
+  }
+
   controls.addEventListener("start", () => {
     cruising = false;
   });
+  let viewChangeTimer: ReturnType<typeof setTimeout> | undefined;
+  let lastViewChangeAt = 0;
+  function emitViewChange() {
+    if (!handlers.onViewChange) return;
+    const elapsed = performance.now() - lastViewChangeAt;
+    if (elapsed >= 90) {
+      lastViewChangeAt = performance.now();
+      handlers.onViewChange(currentViewState());
+      return;
+    }
+    if (viewChangeTimer !== undefined) return;
+    viewChangeTimer = setTimeout(() => {
+      viewChangeTimer = undefined;
+      lastViewChangeAt = performance.now();
+      handlers.onViewChange?.(currentViewState());
+    }, 90 - elapsed);
+  }
   controls.addEventListener("change", () => {
     lockLookAtToPlane();
     refreshBoxelGrid();
+    emitViewChange();
   });
   controls.addEventListener("end", () => {
-    handlers.onViewIdle?.(
-      {
-        x: controls.target.x,
-        y: planeY,
-        z: controls.target.z,
-      },
-      controls.getDistance(),
-    );
+    handlers.onViewIdle?.(currentViewState());
   });
 
-  let impostors: THREE.Object3D | undefined;
   let orbs: THREE.Object3D | undefined;
+  let densityField: THREE.Object3D | undefined;
+  let orbColors: (string | undefined)[] = [];
+  let orbDetails: boolean[] = [];
+  let orbDensityWeights: number[] = [];
+  let orbTheme: VisualTheme | undefined;
   let lines: THREE.LineSegments | undefined;
   let routesLine: THREE.LineSegments | undefined;
-  let nebula: THREE.Object3D | undefined;
   let systems: System[] = [];
   let showGrid = true;
   let showRegionGrid = true;
-  let showBackdrop = true;
-  let theme: VisualTheme = "paper";
-  let lastSync:
-    | {
-        cells: CatalogCell[];
-        systems: System[];
-        colors?: string[];
-        selected?: System;
-        hideImpostors?: boolean;
-        loadedCellIds?: Set<string>;
-        routes?: Route[];
-        grid?: boolean;
-        regionGrid?: boolean;
-        backdrop?: boolean;
-        theme?: VisualTheme;
-      }
-    | undefined;
-
+  let theme: VisualTheme = initialTheme;
   let massCode: MassCode = "a";
-  let massCodePref: MassCode | undefined;
   let boxelWin: BoxelWindow | undefined;
   let grid = makeBoxelGrid(theme);
   scene.add(grid);
 
-  const regionGrid = await makeRegionLayerAsync(regionGridColor("paper"));
+  const regionGrid = await makeRegionLayerAsync(regionGridColor(theme));
+  const regionLabels: THREE.Mesh[] = [];
+  regionGrid.traverse((child) => {
+    if (child instanceof THREE.Mesh && child.userData.regionLabel) {
+      regionLabels.push(child);
+    }
+  });
+  let showRegionLabels = true;
   scene.add(regionGrid);
 
-  let planeY = 0;
   const cruisePos = new THREE.Vector3();
   const cruiseTarget = new THREE.Vector3();
-  const heightPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
-  const _panHit = new THREE.Vector3();
-  const _panGrab = new THREE.Vector3();
+  const cruiseFromPos = new THREE.Vector3();
+  const cruiseFromTarget = new THREE.Vector3();
   const _panRight = new THREE.Vector3();
   const _panFwd = new THREE.Vector3();
   let cruising = false;
+  let cruiseStartedAt = 0;
   let planePanning = false;
   let panLastX = 0;
   let panLastY = 0;
+  let selectedAnchor: THREE.Vector3 | undefined;
+  let selectedSystemKey: string | undefined;
+  let selectionRails: number[] = [];
 
   function lockLookAtToPlane() {
-    controls.target.y = planeY;
-  }
-
-  function hitHeightPlane(clientX: number, clientY: number, out: THREE.Vector3): boolean {
-    const rect = canvas.getBoundingClientRect();
-    const ndc = new THREE.Vector2(
-      ((clientX - rect.left) / rect.width) * 2 - 1,
-      -((clientY - rect.top) / rect.height) * 2 + 1,
-    );
-    raycaster.setFromCamera(ndc, camera);
-    heightPlane.constant = -planeY;
-    return raycaster.ray.intersectPlane(heightPlane, out) !== null;
+    const anchor = cameraAnchorTarget(selectedAnchor, planeY);
+    if (anchor) controls.target.set(anchor.x, anchor.y, anchor.z);
   }
 
   function panOnHeightPlane(dx: number, dz: number) {
@@ -331,8 +424,7 @@ export async function attachScene(
       camera.fov,
       container.clientHeight || 600,
     );
-    const preferred = massCodePref ?? finest;
-    const next = clampMassCode(preferred, finest);
+    const next = effectiveBoxelMassCode(massCode, finest);
     const codeChanged = next !== massCode;
     if (codeChanged) {
       massCode = next;
@@ -393,10 +485,6 @@ export async function attachScene(
     handlers.onPlaneHeight?.(planeY);
   }
 
-  function pickBand(): number {
-    return Math.max(80, Math.min(350, controls.getDistance() * 0.03));
-  }
-
   refreshBoxelGrid();
 
   const ringGeo = new THREE.RingGeometry(1.15, 1.4, 64);
@@ -405,50 +493,38 @@ export async function attachScene(
     side: THREE.DoubleSide,
     transparent: true,
     opacity: 0.85,
+    depthTest: false,
     depthWrite: false,
   });
   const ring = new THREE.Mesh(ringGeo, ringMat);
   ring.visible = false;
+  ring.renderOrder = 10;
   scene.add(ring);
 
   const raycaster = new THREE.Raycaster();
+  const projectedRailTarget = new THREE.Vector3();
 
-  function nebulaHex(i: number, visual: VisualTheme): string {
-    if (visual === "paper") {
-      return ["#d2cec6", "#c8c4bc", "#ddd8d0"][i % 3]!;
+  function snappedRailTarget(clientX: number, clientY: number): number | undefined {
+    if (!selectedSystemKey || selectionRails.length === 0) return undefined;
+    const rect = canvas.getBoundingClientRect();
+    let bestIndex: number | undefined;
+    let bestDistanceSquared = 18 * 18;
+    for (const index of selectionRails) {
+      const system = systems[index];
+      if (!system) continue;
+      projectedRailTarget
+        .set(system.coords.x, system.coords.y, system.coords.z)
+        .project(camera);
+      if (projectedRailTarget.z < -1 || projectedRailTarget.z > 1) continue;
+      const screenX = rect.left + ((projectedRailTarget.x + 1) * 0.5) * rect.width;
+      const screenY = rect.top + ((1 - projectedRailTarget.y) * 0.5) * rect.height;
+      const distanceSquared =
+        (clientX - screenX) ** 2 + (clientY - screenY) ** 2;
+      if (distanceSquared > bestDistanceSquared) continue;
+      bestDistanceSquared = distanceSquared;
+      bestIndex = index;
     }
-    if (visual === "charcoal") {
-      return ["#3a3a42", "#2e3340", "#403838"][i % 3]!;
-    }
-    return ["#5a3a58", "#2a4060", "#4a3828", "#3a2a48"][i % 4]!;
-  }
-
-  function ensureNebula(visual: VisualTheme) {
-    disposeMesh(nebula, scene);
-    nebula = undefined;
-    const n = 900;
-    const items: { x: number; y: number; z: number; r: number; hex: string }[] =
-      [];
-    for (let i = 0; i < n; i++) {
-      const u = hash01(i, 19);
-      const v = hash01(i, 5);
-      const r = Math.pow(u, 0.65) * (GALAXY_RADIUS * 0.92);
-      const th = v * Math.PI * 2 + r / 3400;
-      items.push({
-        x: GALAXY_CORE.x + Math.cos(th) * r,
-        y: (hash01(i, 13) - 0.5) * 900,
-        z: GALAXY_CORE.z + Math.sin(th) * r,
-        r: 2200 + hash01(i, 8) * 2800,
-        hex: nebulaHex(i, visual),
-      });
-    }
-    nebula = orbCloud(items, new THREE.Color(0x888888), {
-      maxPx: visual === "paper" ? 48 : 90,
-      additive: visual !== "paper",
-      fogColor: visual === "paper" ? PAPER : visual === "charcoal" ? CHARCOAL : SPACE,
-      soft: true,
-    });
-    scene.add(nebula);
+    return bestIndex;
   }
 
   function applyTheme(visual: VisualTheme) {
@@ -464,73 +540,123 @@ export async function attachScene(
     container.dataset.theme = visual;
   }
 
+  applyTheme(initialTheme);
+
   function sync(state: {
-    cells: CatalogCell[];
     systems: System[];
     colors?: string[];
+    details?: boolean[];
+    densityWeights?: number[];
     selected?: System;
-    hideImpostors?: boolean;
-    loadedCellIds?: Set<string>;
     routes?: Route[];
     grid?: boolean;
     regionGrid?: boolean;
-    backdrop?: boolean;
     theme?: VisualTheme;
   }) {
-    lastSync = state;
+    const nextColors = state.systems.map((_, index) => state.colors?.[index]);
+    const nextDetails = state.systems.map((_, index) => Boolean(state.details?.[index]));
+    const nextDensityWeights = state.systems.map((_, index) =>
+      Math.min(1, Math.max(0, state.densityWeights?.[index] ?? 0)),
+    );
+    const rebuildOrbs =
+      orbTheme !== (state.theme ?? theme) ||
+      state.systems.length !== systems.length ||
+      state.systems.some(
+        (system, index) =>
+          system !== systems[index] ||
+          nextColors[index] !== orbColors[index] ||
+          nextDetails[index] !== orbDetails[index] ||
+          nextDensityWeights[index] !== orbDensityWeights[index],
+      );
     systems = state.systems;
+    const nextSelectedSystemKey = state.selected
+      ? String(state.selected.id64 ?? state.selected.name)
+      : undefined;
+    if (nextSelectedSystemKey !== selectedSystemKey) {
+      selectedSystemKey = nextSelectedSystemKey;
+      selectedAnchor = state.selected
+        ? new THREE.Vector3(
+            state.selected.coords.x,
+            state.selected.coords.y,
+            state.selected.coords.z,
+          )
+        : undefined;
+      const nextPlaneY = selectionPlaneHeight(planeY, state.selected?.coords);
+      if (nextPlaneY !== planeY) applyPlaneY(nextPlaneY, false);
+    }
     showGrid = state.grid !== false;
     showRegionGrid = state.regionGrid !== false;
-    showBackdrop = state.backdrop !== false;
     if (state.theme && state.theme !== theme) applyTheme(state.theme);
     grid.visible = showGrid;
     regionGrid.visible = showRegionGrid;
-    if (showBackdrop && !nebula) ensureNebula(theme);
-    if (nebula) nebula.visible = showBackdrop;
 
-    disposeMesh(impostors, scene);
-    disposeMesh(orbs, scene);
+    if (rebuildOrbs) {
+      disposeMesh(orbs, scene);
+      disposeMesh(densityField, scene);
+    }
     disposeMesh(lines, scene);
     disposeMesh(routesLine, scene);
-    impostors = undefined;
-    orbs = undefined;
+    if (rebuildOrbs) {
+      orbs = undefined;
+      densityField = undefined;
+    }
     lines = undefined;
     routesLine = undefined;
 
-    const fogColor = theme === "paper" ? PAPER : theme === "charcoal" ? CHARCOAL : SPACE;
-    const additive = theme !== "paper";
-    if (!state.hideImpostors) {
-      const balls = impostorOrbs(state.cells, state.loadedCellIds).map((p, i) => ({
-        ...p,
-        hex:
-          theme === "realistic"
-            ? SPECTRAL[i % SPECTRAL.length]!
-            : theme === "charcoal"
-              ? ["#d8d4cc", "#c4c0b8", "#eeeae2", "#a8a49c"][i % 4]!
-              : p.hex,
-      }));
-      if (balls.length) {
-        impostors = orbCloud(balls, new THREE.Color(0x4a4a46), {
-          maxPx: 12,
-          additive,
-          fogColor,
-        });
-        scene.add(impostors);
+    const additive = false;
+    if (rebuildOrbs && state.systems.length) {
+      const unresolvedDensity = state.systems
+        .map((system, index) => ({ system, index }))
+        .filter(({ index }) => nextDensityWeights[index]! > 0);
+      if (unresolvedDensity.length) {
+        densityField = orbCloud(
+          unresolvedDensity.map(({ system, index }) => ({
+            x: system.coords.x,
+            y: system.coords.y,
+            z: system.coords.z,
+            r: 1,
+            hex: state.theme === "paper" ? "#706f69" : "#d8d0c0",
+            visibility:
+              stableOrbVisibility(String(system.id64 ?? system.name)) *
+              (0.35 + 0.65 * nextDensityWeights[index]!),
+            opacityNoise: stableOrbNoise(
+              String(system.id64 ?? system.name),
+              0xd31f13,
+            ),
+          })),
+          new THREE.Color(0xd8d0c0),
+          {
+            maxPx: 14,
+            soft: true,
+            density: true,
+            pickable: false,
+          },
+        );
+        densityField.renderOrder = 1;
+        scene.add(densityField);
       }
-    }
-    if (state.systems.length) {
       orbs = orbCloud(
         state.systems.map((s, i) => ({
           x: s.coords.x,
           y: s.coords.y,
           z: s.coords.z,
-          r: orbScale(s.population),
+          r: orbScale(s.stellarRadiusMeters),
           hex: state.colors?.[i],
+          visibility: stableOrbVisibility(String(s.id64 ?? s.name)),
+          opacityNoise: stableOrbNoise(String(s.id64 ?? s.name), 0xa17fa9),
+          detail: nextDetails[i],
         })),
         new THREE.Color(0x2e2e2c),
-        { maxPx: 55, additive, fogColor },
+        { maxPx: 12, additive },
       );
+      orbs.renderOrder = 3;
       scene.add(orbs);
+    }
+    if (rebuildOrbs) {
+      orbColors = nextColors;
+      orbDetails = nextDetails;
+      orbDensityWeights = nextDensityWeights;
+      orbTheme = theme;
     }
     ring.visible = Boolean(state.selected);
     if (state.selected) {
@@ -566,67 +692,68 @@ export async function attachScene(
         scene.add(routesLine);
       }
     }
-    if (state.selected && state.systems.length > 1) {
+    selectionRails = selectionRailIndexes(
+      state.systems,
+      state.selected,
+      nextDetails,
+    );
+    if (state.selected && selectionRails.length) {
       const origin = state.selected.coords;
-      const nearest = [...state.systems]
-        .filter((s) => s.name !== state.selected!.name)
-        .map((s) => ({
-          s,
-          d:
-            (s.coords.x - origin.x) ** 2 +
-            (s.coords.y - origin.y) ** 2 +
-            (s.coords.z - origin.z) ** 2,
-        }))
-        .filter((n) => n.d > 0 && n.d <= 200 * 200)
-        .sort((a, b) => a.d - b.d)
-        .slice(0, 5);
-      if (nearest.length) {
-        const verts: number[] = [];
-        for (const n of nearest) {
-          verts.push(
-            origin.x,
-            origin.y,
-            origin.z,
-            n.s.coords.x,
-            n.s.coords.y,
-            n.s.coords.z,
-          );
-        }
-        const geo = new THREE.BufferGeometry();
-        geo.setAttribute(
-          "position",
-          new THREE.BufferAttribute(new Float32Array(verts), 3),
+      const verts: number[] = [];
+      for (const index of selectionRails) {
+        const neighbor = state.systems[index]!;
+        verts.push(
+          origin.x,
+          origin.y,
+          origin.z,
+          neighbor.coords.x,
+          neighbor.coords.y,
+          neighbor.coords.z,
         );
-        lines = new THREE.LineSegments(
-          geo,
-          new THREE.LineBasicMaterial({
-            color: 0x9a9a94,
-            transparent: true,
-            opacity: 0.45,
-          }),
-        );
-        scene.add(lines);
       }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute(
+        "position",
+        new THREE.BufferAttribute(new Float32Array(verts), 3),
+      );
+      lines = new THREE.LineSegments(
+        geo,
+        new THREE.LineBasicMaterial({
+          color: 0x9a9a94,
+          transparent: true,
+          opacity: 0.45,
+        }),
+      );
+      scene.add(lines);
     }
   }
 
-  function onPickPointerDown(ev: PointerEvent) {
-    if (ev.button !== 0) return;
+  let primaryPickStart:
+    | { pointerId: number; x: number; y: number; button: number }
+    | undefined;
+
+  function pickAt(clientX: number, clientY: number) {
+    const snappedIndex = snappedRailTarget(clientX, clientY);
+    if (snappedIndex !== undefined) {
+      handlers.onSelectSystem(snappedIndex);
+      return;
+    }
     const rect = canvas.getBoundingClientRect();
     const ndc = new THREE.Vector2(
-      ((ev.clientX - rect.left) / rect.width) * 2 - 1,
-      -((ev.clientY - rect.top) / rect.height) * 2 + 1,
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
     );
     raycaster.setFromCamera(ndc, camera);
     if (orbs) {
       const hits = raycaster.intersectObject(orbs);
-      const band = pickBand();
       for (const hit of hits) {
         const id = hit.instanceId ?? hit.index;
         if (id === undefined) continue;
         const sys = systems[id];
         if (!sys) continue;
-        if (Math.abs(sys.coords.y - planeY) > band) continue;
+        if (!railSelectableIndex(id, selectionRails, Boolean(selectedSystemKey))) {
+          continue;
+        }
         handlers.onSelectSystem(id);
         return;
       }
@@ -636,24 +763,51 @@ export async function attachScene(
     handlers.onPickCell({ x: pt.x, y: pt.y, z: pt.z });
   }
 
+  function onPickPointerDown(ev: PointerEvent) {
+    if (ev.button !== 0) return;
+    primaryPickStart = {
+      pointerId: ev.pointerId,
+      x: ev.clientX,
+      y: ev.clientY,
+      button: ev.button,
+    };
+  }
+
+  function onPickPointerUp(ev: PointerEvent) {
+    const start = primaryPickStart;
+    if (!start || start.pointerId !== ev.pointerId) return;
+    primaryPickStart = undefined;
+    if (
+      isPrimaryClickGesture(
+        start.button,
+        start.x,
+        start.y,
+        ev.clientX,
+        ev.clientY,
+      )
+    ) {
+      pickAt(ev.clientX, ev.clientY);
+    }
+  }
+
+  function onPickPointerCancel(ev: PointerEvent) {
+    if (primaryPickStart?.pointerId === ev.pointerId) primaryPickStart = undefined;
+  }
+
   function onPlanePanDown(ev: PointerEvent) {
     if (ev.button !== 2) return;
     ev.preventDefault();
     cruising = false;
+    selectedAnchor = cameraAnchorAfterPlanePanStart(selectedAnchor);
     planePanning = true;
     panLastX = ev.clientX;
     panLastY = ev.clientY;
-    hitHeightPlane(ev.clientX, ev.clientY, _panGrab);
     canvas.setPointerCapture(ev.pointerId);
   }
 
   function onPlanePanMove(ev: PointerEvent) {
     if (!planePanning) return;
-    if (hitHeightPlane(ev.clientX, ev.clientY, _panHit)) {
-      panOnHeightPlane(_panGrab.x - _panHit.x, _panGrab.z - _panHit.z);
-    } else {
-      panFromPixels(ev.clientX - panLastX, ev.clientY - panLastY);
-    }
+    panFromPixels(ev.clientX - panLastX, ev.clientY - panLastY);
     panLastX = ev.clientX;
     panLastY = ev.clientY;
   }
@@ -667,14 +821,7 @@ export async function attachScene(
     } catch {
       /* not captured */
     }
-    handlers.onViewIdle?.(
-      {
-        x: controls.target.x,
-        y: planeY,
-        z: controls.target.z,
-      },
-      controls.getDistance(),
-    );
+    handlers.onViewIdle?.(currentViewState());
   }
 
   function onContextMenu(ev: Event) {
@@ -682,6 +829,8 @@ export async function attachScene(
   }
 
   canvas.addEventListener("pointerdown", onPickPointerDown);
+  canvas.addEventListener("pointerup", onPickPointerUp);
+  canvas.addEventListener("pointercancel", onPickPointerCancel);
   canvas.addEventListener("pointerdown", onPlanePanDown);
   canvas.addEventListener("pointermove", onPlanePanMove);
   canvas.addEventListener("pointerup", onPlanePanUp);
@@ -711,18 +860,40 @@ export async function attachScene(
   function loop() {
     raf = requestAnimationFrame(loop);
     if (cruising) {
-      camera.position.lerp(cruisePos, 0.12);
-      controls.target.lerp(cruiseTarget, 0.12);
+      const progress = cameraCruiseProgress(performance.now() - cruiseStartedAt);
+      camera.position.lerpVectors(cruiseFromPos, cruisePos, progress);
+      controls.target.lerpVectors(cruiseFromTarget, cruiseTarget, progress);
       lockLookAtToPlane();
-      if (camera.position.distanceTo(cruisePos) < 1.5) cruising = false;
+      if (progress >= 1) {
+        cruising = false;
+        handlers.onViewIdle?.(currentViewState());
+      }
     } else {
       controls.update();
       lockLookAtToPlane();
     }
+    // OrbitControls applies its look-at before our persistent selection lock.
+    // Re-aim after the lock so the selected System stays at the true view center.
+    camera.lookAt(controls.target);
+    camera.updateMatrixWorld();
     refreshBoxelGrid();
     if (ring.visible) ring.lookAt(camera.position);
     const d = controls.getDistance();
-    ring.scale.setScalar(Math.max(1.2, Math.min(18, d * 0.018)));
+    const nextShowRegionLabels = regionLabelsVisible(d);
+    if (nextShowRegionLabels !== showRegionLabels) {
+      showRegionLabels = nextShowRegionLabels;
+      for (const label of regionLabels) label.visible = showRegionLabels;
+    }
+    const viewDistance = orbs?.userData.orbViewDistance as
+      | { value: number }
+      | undefined;
+    if (viewDistance) viewDistance.value = d;
+    const densityViewDistance = densityField?.userData.orbViewDistance as
+      | { value: number }
+      | undefined;
+    if (densityViewDistance) densityViewDistance.value = d;
+    if (orbs) orbs.userData.orbViewportHeight = canvas.clientHeight || 600;
+    ring.scale.setScalar(selectionRingScale(d));
     if (handlers.viewCompass) drawViewGizmo(handlers.viewCompass, camera, theme);
     renderer.render(scene, camera);
   }
@@ -731,8 +902,12 @@ export async function attachScene(
   return {
     sync,
     flyCamera(target) {
-      cruiseTarget.set(target.x, planeY, target.z);
-      cruisePos.set(target.x + 22, planeY + 14, target.z + 52);
+      selectedAnchor = new THREE.Vector3(target.x, target.y, target.z);
+      cruiseFromPos.copy(camera.position);
+      cruiseFromTarget.copy(controls.target);
+      cruiseTarget.copy(selectedAnchor);
+      cruisePos.set(target.x + 22, target.y + 14, target.z + 52);
+      cruiseStartedAt = performance.now();
       cruising = true;
     },
     setPlaneHeight(y) {
@@ -747,8 +922,7 @@ export async function attachScene(
         camera.fov,
         container.clientHeight || 600,
       );
-      const next = clampMassCode(code, finest);
-      massCodePref = code === next ? next : undefined;
+      const next = effectiveBoxelMassCode(code, finest);
       lastFinest = finest;
       if (next === massCode) {
         handlers.onMassCode?.(massCode, finest);
@@ -757,12 +931,6 @@ export async function attachScene(
       massCode = next;
       rebuildBoxelGrid();
       handlers.onMassCode?.(massCode, finest);
-    },
-    setTheme(next) {
-      applyTheme(next);
-      disposeMesh(nebula, scene);
-      nebula = undefined;
-      if (lastSync) sync({ ...lastSync, theme: next });
     },
     resetTopView() {
       cruising = false;
@@ -791,11 +959,18 @@ export async function attachScene(
       controls.enableDamping = damping;
       lockLookAtToPlane();
       refreshBoxelGrid();
+      handlers.onViewIdle?.(currentViewState());
+    },
+    viewState() {
+      return currentViewState();
     },
     destroy() {
       cancelAnimationFrame(raf);
+      if (viewChangeTimer !== undefined) clearTimeout(viewChangeTimer);
       window.removeEventListener("resize", onResize);
       canvas.removeEventListener("pointerdown", onPickPointerDown);
+      canvas.removeEventListener("pointerup", onPickPointerUp);
+      canvas.removeEventListener("pointercancel", onPickPointerCancel);
       canvas.removeEventListener("pointerdown", onPlanePanDown);
       canvas.removeEventListener("pointermove", onPlanePanMove);
       canvas.removeEventListener("pointerup", onPlanePanUp);
@@ -804,11 +979,10 @@ export async function attachScene(
       canvas.removeEventListener("webglcontextlost", onContextLost);
       canvas.removeEventListener("webglcontextrestored", onContextRestored);
       controls.dispose();
-      disposeMesh(impostors, scene);
       disposeMesh(orbs, scene);
+      disposeMesh(densityField, scene);
       disposeMesh(lines, scene);
       disposeMesh(routesLine, scene);
-      disposeMesh(nebula, scene);
       disposeMesh(regionGrid, scene);
       scene.remove(grid);
       scene.remove(ring);

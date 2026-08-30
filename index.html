@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="realistic">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -14,20 +14,38 @@
       :root {
         --paper: #eaeae8;
         --ink: #1a1a19;
-        --mute: #6f6f6b;
-        --line: #cfcfca;
+        --mute: #5f5f5a;
+        --line: #b8b8b2;
+        --surface: #f7f7f5;
+        --control: #f2f2ef;
+        --accent: #8b2323;
+        --danger: #a51f2a;
+        --shadow: rgba(26, 26, 25, 0.12);
+        color-scheme: light;
       }
       html[data-theme="charcoal"] {
         --paper: #1c1c1b;
-        --ink: #eceae4;
-        --mute: #a8a8a2;
-        --line: #3a3a38;
+        --ink: #f4f2eb;
+        --mute: #bbb9b1;
+        --line: #5b5a54;
+        --surface: #292927;
+        --control: #32322f;
+        --accent: #ffad79;
+        --danger: #ff918b;
+        --shadow: rgba(0, 0, 0, 0.44);
+        color-scheme: dark;
       }
       html[data-theme="realistic"] {
         --paper: #07060c;
-        --ink: #f2efe8;
-        --mute: #b0aea8;
-        --line: #2a2833;
+        --ink: #f6f2e9;
+        --mute: #c0bac9;
+        --line: #504b5d;
+        --surface: #17141f;
+        --control: #211d2c;
+        --accent: #ffb36b;
+        --danger: #ff9289;
+        --shadow: rgba(0, 0, 0, 0.58);
+        color-scheme: dark;
       }
       html,
       body,
@@ -47,7 +65,7 @@
         position: fixed;
         inset: 0;
         pointer-events: none;
-        z-index: 8;
+        z-index: 2;
         opacity: 0.28;
         background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 220 220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
         mix-blend-mode: multiply;
@@ -61,6 +79,74 @@
         position: relative;
         z-index: 1;
         overflow: hidden;
+      }
+      #loading-screen {
+        position: fixed;
+        inset: 0;
+        z-index: 9;
+        display: grid;
+        place-items: center;
+        background: var(--paper);
+        color: var(--ink);
+        transition: opacity 240ms ease, visibility 240ms ease;
+      }
+      #loading-screen[aria-hidden="true"] {
+        opacity: 0;
+        visibility: hidden;
+        pointer-events: none;
+      }
+      .loading-card {
+        width: min(430px, calc(100vw - 48px));
+        text-align: center;
+        padding: 30px 32px 28px;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: var(--surface);
+        box-shadow: 0 22px 70px var(--shadow);
+      }
+      .loading-mark {
+        width: 34px;
+        height: 34px;
+        margin: 0 auto 20px;
+        border: 1px solid var(--line);
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        animation: loading-spin 900ms linear infinite;
+      }
+      .loading-card h1 {
+        margin: 0 0 8px;
+        font: 600 18px/1.2 "Oxanium", sans-serif;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .loading-card p {
+        margin: 0 0 16px;
+        color: var(--mute);
+        font-size: 14px;
+      }
+      .loading-progress {
+        height: 5px;
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--paper) 80%, var(--line));
+      }
+      .loading-progress-fill {
+        width: 0;
+        height: 100%;
+        border-radius: inherit;
+        background: var(--accent);
+        transition: width 120ms linear;
+      }
+      #loading-percent {
+        display: block;
+        margin-top: 8px;
+        color: var(--mute);
+        font: 500 11px/1 "Oxanium", sans-serif;
+        letter-spacing: 0.08em;
+      }
+      @keyframes loading-spin {
+        to { transform: rotate(360deg); }
       }
       #hud {
         position: fixed;
@@ -80,7 +166,7 @@
       #hud input,
       #hud select,
       #hud button {
-        background: transparent;
+        background: var(--control);
         color: var(--ink);
         border: 1px solid var(--line);
         border-radius: 999px;
@@ -88,10 +174,85 @@
         font-family: inherit;
         font-size: 13px;
       }
-      #hud input {
-        flex: 1;
-        max-width: 280px;
-        background: color-mix(in srgb, var(--paper) 88%, white);
+      #hud input[type="search"] {
+        width: 100%;
+        background: var(--surface);
+      }
+      #search-wrap {
+        position: relative;
+        flex: 1 1 250px;
+        max-width: 320px;
+      }
+      #search-suggestions {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: calc(100% + 7px);
+        max-height: min(360px, 55vh);
+        overflow: auto;
+        padding: 6px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--surface);
+        box-shadow: 0 16px 42px var(--shadow);
+      }
+      #search-suggestions[hidden] {
+        display: none;
+      }
+      #search-suggestions button {
+        width: 100%;
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        border: 0;
+        border-radius: 7px;
+        padding: 8px 10px;
+        text-align: left;
+        background: transparent;
+      }
+      #search-suggestions button:hover,
+      #search-suggestions button:focus-visible {
+        background: var(--control);
+        outline: 1px solid var(--accent);
+      }
+      #search-suggestions small,
+      .search-suggestion-status {
+        color: var(--mute);
+        font: 500 11px/1.4 "Oxanium", sans-serif;
+      }
+      .search-suggestion-status {
+        display: block;
+        padding: 8px 10px;
+      }
+      #hud input[type="range"] {
+        width: 150px;
+        padding: 0;
+        accent-color: var(--accent);
+      }
+      #hud input::placeholder {
+        color: var(--mute);
+        opacity: 1;
+      }
+      #hud button:hover,
+      #hud button:focus-visible,
+      #hud input:focus-visible,
+      #hud select:focus-visible,
+      #panel button:focus-visible,
+      .height-nudge:focus-visible,
+      #theme-picker button:focus-visible {
+        border-color: var(--accent);
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+      #lod-readout,
+      #engine-status {
+        font-size: 11px;
+        letter-spacing: 0.04em;
+        color: var(--mute);
+      }
+      #lod-readout[data-danger="true"] {
+        color: var(--danger);
+        font-weight: 700;
       }
       #hud label {
         font-size: 12px;
@@ -119,7 +280,7 @@
         padding: 0;
         border: 1px solid var(--line);
         border-radius: 50%;
-        background: color-mix(in srgb, var(--paper) 82%, white);
+        background: var(--surface);
         cursor: pointer;
         display: grid;
         place-items: center;
@@ -152,7 +313,7 @@
         font-size: 12px;
         letter-spacing: 0.04em;
         color: var(--mute);
-        background: color-mix(in srgb, var(--paper) 82%, white);
+        background: var(--surface);
         pointer-events: none;
       }
       #panel {
@@ -161,7 +322,7 @@
         top: 72px;
         bottom: 72px;
         width: min(340px, 88vw);
-        background: color-mix(in srgb, var(--paper) 92%, white);
+        background: var(--surface);
         border: 1px solid var(--line);
         border-radius: 4px 0 0 4px;
         transform: translateX(calc(100% + 28px));
@@ -172,7 +333,7 @@
         padding: 28px 26px;
         overflow: auto;
         z-index: 5;
-        box-shadow: -18px 0 50px rgba(26, 26, 25, 0.08);
+        box-shadow: -18px 0 50px var(--shadow);
       }
       #panel.open {
         transform: translateX(0);
@@ -191,7 +352,7 @@
         margin: 0 0 10px;
       }
       #panel button {
-        background: none;
+        background: var(--control);
         border: 1px solid var(--line);
         border-radius: 999px;
         padding: 4px 12px;
@@ -199,7 +360,7 @@
         font-size: 12px;
         letter-spacing: 0.1em;
         text-transform: uppercase;
-        color: var(--mute);
+        color: var(--ink);
         cursor: pointer;
       }
       .region-label {
@@ -223,7 +384,7 @@
         padding: 6px;
         border: 1px solid var(--line);
         border-radius: 999px;
-        background: color-mix(in srgb, var(--paper) 86%, white);
+        background: var(--surface);
       }
       #theme-picker button {
         width: 22px;
@@ -339,7 +500,7 @@
         padding: 0;
         border: 1px solid var(--line);
         border-radius: 4px;
-        background: color-mix(in srgb, var(--paper) 86%, white);
+        background: var(--control);
         color: var(--ink);
         cursor: pointer;
         font-size: 9px;
@@ -359,34 +520,37 @@
   </head>
   <body>
     <div id="hud">
-      <input id="search" placeholder="Search a System" />
+      <div id="search-wrap">
+        <input id="search" type="search" placeholder="System name or ID64" autocomplete="off" aria-controls="search-suggestions" aria-autocomplete="list" />
+        <div id="search-suggestions" role="listbox" hidden></div>
+      </div>
       <button id="go" type="button">Go</button>
       <label>LOD
-        <select id="lod">
-          <option value="0" selected>impostors only</option>
-          <option value="200">200 ly ring</option>
-          <option value="800">800 ly ring</option>
-          <option value="2500">2500 ly ring</option>
-          <option value="all">everything real</option>
-        </select>
-      </label>
-      <label>Color
-        <select id="colorby">
-          <option value="none" selected>none</option>
-          <option value="economy">economy</option>
-          <option value="allegiance">allegiance</option>
-          <option value="government">government</option>
-        </select>
+        <input id="lod" type="range" min="0" max="100" value="10" step="10" title="The full 50,000-System overview is always visible. Higher values add more camera-resident procedural detail; 100% removes ED3DM thinning from everything already resident." />
+        <span id="lod-readout">50,000 floor · 10% detail</span>
       </label>
       <label>Filter
         <select id="filter">
           <option value="" selected>all</option>
-          <option value="home">home</option>
-          <option value="colonia">colonia</option>
+          <optgroup label="Generation">
+            <option value="generation:authored">authored</option>
+            <option value="generation:ordinary">ordinary procedural</option>
+            <option value="generation:constrained">constrained procedural</option>
+          </optgroup>
+          <optgroup label="Primary star">
+            <option value="stellar:O">O class</option>
+            <option value="stellar:B">B class</option>
+            <option value="stellar:A">A class</option>
+            <option value="stellar:F">F class</option>
+            <option value="stellar:G">G class</option>
+            <option value="stellar:K">K class</option>
+            <option value="stellar:M">M class</option>
+          </optgroup>
         </select>
       </label>
+      <span id="engine-status" role="status">PEGE loading</span>
       <label>Boxel
-        <select id="masscode" title="Zoom in to unlock finer boxels">
+        <select id="masscode" title="Keep this boxel filter while zooming">
           <option value="a" selected>a · 10 ly</option>
           <option value="b">b · 20 ly</option>
           <option value="c">c · 40 ly</option>
@@ -399,7 +563,6 @@
       </label>
       <label><input id="grid" type="checkbox" checked /> grid</label>
       <label><input id="regions" type="checkbox" checked /> regions</label>
-      <label><input id="backdrop" type="checkbox" checked /> dust</label>
     </div>
     <aside id="panel"></aside>
     <div id="height-rail">
@@ -408,7 +571,7 @@
       <div class="height-track">
         <div class="height-gutter"></div>
         <div class="height-fill" id="height-fill"></div>
-        <input id="height" type="range" min="-10000" max="10000" value="0" step="10" aria-label="Galactic height" />
+        <input id="height" type="range" min="-10000" max="10000" value="0" step="any" aria-label="Galactic height" />
       </div>
       <button type="button" class="height-nudge" id="height-down" aria-label="Lower height 10 light years" title="-10 ly">▼</button>
       <span id="height-readout">0 ly</span>
@@ -419,13 +582,32 @@
       </button>
       <div id="wordmark">ED3DM</div>
     </div>
-    <div id="hint">Drag to rotate · Scroll to zoom</div>
+    <div id="hint">Click any factual star · Density glow is not selectable · Drag rotates · Right-drag pans X/Z · Scroll zooms</div>
     <div id="theme-picker" role="group" aria-label="Map colors">
-      <button type="button" data-theme="paper" aria-pressed="true" title="Paper"></button>
+      <button type="button" data-theme="paper" aria-pressed="false" title="Paper"></button>
       <button type="button" data-theme="charcoal" aria-pressed="false" title="Charcoal"></button>
-      <button type="button" data-theme="realistic" aria-pressed="false" title="Realistic stars"></button>
+      <button type="button" data-theme="realistic" aria-pressed="true" title="Realistic stars"></button>
     </div>
     <div id="edmap"></div>
+    <div id="loading-screen" role="status" aria-live="polite" aria-hidden="false">
+      <div class="loading-card">
+        <div class="loading-mark" aria-hidden="true"></div>
+        <h1>Please wait... Generating galaxy</h1>
+        <p id="loading-detail">Downloading PEGE 1.5 engine data</p>
+        <div
+          class="loading-progress"
+          id="loading-progress"
+          role="progressbar"
+          aria-label="Galaxy generation progress"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-valuenow="0"
+        >
+          <div class="loading-progress-fill" id="loading-progress-fill"></div>
+        </div>
+        <span id="loading-percent">0%</span>
+      </div>
+    </div>
     <script type="module" src="/demo/main.ts"></script>
   </body>
 </html>

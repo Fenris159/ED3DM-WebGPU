@@ -2,31 +2,56 @@ import type {
   CatalogCell,
   ColorByMode,
   CreateOptions,
+  GenerationKind,
+  GalaxyLoadProgress,
+  GalaxyCameraView,
   DensityOverview,
+  GalaxyOverview,
+  GalaxySpatialTile,
+  GalaxySource,
   LodSetting,
   MassCode,
   Route,
   System,
+  SystemFilter,
+  SystemSuggestion,
   TileFile,
   VisualTheme,
 } from "./types";
-import { colorFor, spectralColor } from "./palettes";
+import { colorFor } from "./palettes";
 import { attachScene, type SceneHandle } from "./scene";
+import {
+  cameraResidencyTilePlan,
+  pegeTileKeyString,
+  progressivePegeTileShells,
+  taperedPegeTilePointBudget,
+} from "./pege-tiles";
+import { focusedResidencyRegion } from "./lod";
 
 export type {
   ColorByMode,
   CreateOptions,
+  GenerationKind,
+  GalaxyLoadProgress,
+  GalaxyCameraView,
+  GalaxyOverview,
+  GalaxySpatialTile,
   LodSetting,
   System,
+  SystemFilter,
+  SystemSuggestion,
+  GalaxySource,
   VisualTheme,
   MassCode,
 } from "./types";
+export { PegeGalaxySource } from "./pege-source";
 export {
   MASS_CODES,
   BOXEL_ORIGIN,
   boxelSize,
   boxelToPlayer,
   containingBoxel,
+  distanceFromSol,
   playerToBoxel,
 } from "./boxel";
 export { colorFor } from "./palettes";
@@ -35,11 +60,10 @@ export type Ed3dmMap = {
   setLod: (lod: LodSetting) => Promise<void>;
   focus: (coords: { x: number; y: number; z: number }) => Promise<void>;
   flyTo: (name: string) => Promise<System | undefined>;
-  setFilter: (filter: { categories?: string[] }) => void;
+  setFilter: (filter: SystemFilter) => void;
   setColorBy: (mode: ColorByMode) => void;
   setGrid: (on: boolean) => void;
   setRegionGrid: (on: boolean) => void;
-  setBackdrop: (on: boolean) => void;
   setTheme: (theme: VisualTheme) => void;
   setPlaneHeight: (y: number) => void;
   planeHeight: () => number;
@@ -52,6 +76,7 @@ export type Ed3dmMap = {
   selected: () => System | undefined;
   visibleSystems: () => System[];
   orbColor: (name: string) => string | undefined;
+  suggest: (query: string, limit?: number) => Promise<SystemSuggestion[]>;
 };
 
 function resolveContainer(container: HTMLElement | string): HTMLElement {
@@ -79,28 +104,56 @@ async function loadJson<T>(url: string): Promise<T> {
 export const ED3DM = {
   async create(options: CreateOptions): Promise<Ed3dmMap> {
     const el = resolveContainer(options.container);
-    const overview = await loadJson<DensityOverview>(
-      options.catalog.overviewUrl,
-    );
+    const catalog = options.catalog;
+    const source: GalaxySource | undefined = options.source;
+    if (!catalog && !source) {
+      throw new Error("ED3DM: create requires a galaxy source or Catalog");
+    }
+    const overview = catalog
+      ? await loadJson<DensityOverview>(catalog.overviewUrl)
+      : { cells: [] };
     const cells = overview.cells ?? [];
     const loaded = new Set<string>();
     const tileCache = new Map<string, System[]>();
     let lod: LodSetting = options.lod ?? 0;
     let focusAt: { x: number; y: number; z: number } | undefined;
+    let cameraView: GalaxyCameraView | undefined;
+    let cameraDistanceLy = 30_000;
+    let sourceOverviewSystems: System[] = [];
+    let sourceLocalSystems: System[] = [];
+    let sourceSpatialTiles: GalaxySpatialTile[] = [];
+    let sourceOverviewRequest: AbortController | undefined;
+    let sourceLocalRequest: AbortController | undefined;
+    let sourceLocalRequestKey: string | undefined;
+    let sourceSpatialRequest: AbortController | undefined;
+    let sourceSpatialRequestKey: string | undefined;
+    let committedSpatialRequestKey: string | undefined;
+    let committedLocalRequestKey: string | undefined;
     let selected: System | undefined;
+    let flyRevision = 0;
     let colorBy: ColorByMode = "none";
     let categoryFilter: string[] | undefined;
+    let generationFilter: System["generation"][] | undefined;
+    let stellarTypeFilter: string[] | undefined;
     let showGrid = true;
     let showRegionGrid = true;
-    let showBackdrop = true;
-    let theme: VisualTheme = "paper";
+    let theme: VisualTheme = options.theme ?? "realistic";
+    let themePaintTimer: ReturnType<typeof setTimeout> | undefined;
+    let viewIdleTimer: ReturnType<typeof setTimeout> | undefined;
+    let viewLoadRunning = false;
+    let viewLoadQueued = false;
     let routes: Route[] = [];
     let searchIndex: Record<string, { x: number; y: number; z: number; tile?: string }> | null =
       null;
 
+    function abortSourceDetailRequests() {
+      sourceLocalRequest?.abort();
+      sourceSpatialRequest?.abort();
+    }
+
     async function ensureTile(cell: CatalogCell): Promise<System[]> {
       if (!cell.tile) return [];
-      const url = tileUrl(options.catalog.tileBaseUrl, cell.tile);
+      const url = tileUrl(catalog?.tileBaseUrl, cell.tile);
       if (tileCache.has(url)) return tileCache.get(url)!;
       const data = await loadJson<TileFile>(url);
       const systems = data.systems ?? [];
@@ -137,7 +190,7 @@ export const ED3DM = {
       const keep = new Set<string>();
       const add = (cell: CatalogCell | undefined) => {
         if (!cell?.tile) return;
-        keep.add(tileUrl(options.catalog.tileBaseUrl, cell.tile));
+        keep.add(tileUrl(catalog?.tileBaseUrl, cell.tile));
       };
       if (lod === "all") {
         for (const cell of cells) add(cell);
@@ -164,7 +217,127 @@ export const ED3DM = {
       }
     }
 
+    async function ensureSourceLocal(): Promise<boolean> {
+      if (!source || !focusAt) return false;
+      const residency = focusedResidencyRegion(focusAt, cameraDistanceLy);
+      const requestKey = `region:${residency.key}:${lod}`;
+      if (requestKey === committedLocalRequestKey) return true;
+      if (requestKey === sourceLocalRequestKey) return false;
+      sourceLocalRequest?.abort();
+      const controller = new AbortController();
+      sourceLocalRequest = controller;
+      sourceLocalRequestKey = requestKey;
+      try {
+        const systems = await source.loadRegion(
+          {
+            center: residency.center,
+            radiusLy: residency.radiusLy,
+            bounds: {
+              minimum: residency.minimum,
+              maximum: residency.maximum,
+            },
+            cameraDistanceLy,
+            lod,
+          },
+          controller.signal,
+        );
+        if (controller.signal.aborted) return false;
+        sourceLocalSystems = systems;
+        committedLocalRequestKey = requestKey;
+        return true;
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === "AbortError")) {
+          throw error;
+        }
+        return false;
+      } finally {
+        if (sourceLocalRequest === controller) {
+          sourceLocalRequest = undefined;
+          sourceLocalRequestKey = undefined;
+        }
+      }
+    }
+
+    async function ensureSourceSpatial(): Promise<boolean> {
+      if (!source?.loadSpatialTiles || !focusAt) return false;
+      const keyWeights = cameraResidencyTilePlan(
+        focusAt,
+        cameraDistanceLy < 180,
+      );
+      const totalTargetSystems = taperedPegeTilePointBudget(
+        cameraDistanceLy,
+        lod,
+        keyWeights,
+      );
+      if (totalTargetSystems === 0) return false;
+      const requestKey = `tiles:${keyWeights
+        .map(({ key, weight }) => `${pegeTileKeyString(key)}@${weight.toFixed(3)}`)
+        .join(",")}:${totalTargetSystems}`;
+      if (requestKey === committedSpatialRequestKey) return true;
+      if (requestKey === sourceSpatialRequestKey) return false;
+      sourceSpatialRequest?.abort();
+      const controller = new AbortController();
+      sourceSpatialRequest = controller;
+      sourceSpatialRequestKey = requestKey;
+      try {
+        const progressiveTiles = [];
+        for (const shell of progressivePegeTileShells(keyWeights, totalTargetSystems)) {
+          const tiles = await source.loadSpatialTiles(
+            {
+              keys: shell.keyWeights.map(({ key }) => key),
+              totalTargetSystems: shell.totalTargetSystems,
+              keyWeights: shell.keyWeights,
+            },
+            controller.signal,
+          );
+          if (controller.signal.aborted) return false;
+          progressiveTiles.push(...tiles);
+          sourceSpatialTiles = [...progressiveTiles];
+          paint();
+        }
+        committedSpatialRequestKey = requestKey;
+        return true;
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === "AbortError")) {
+          throw error;
+        }
+        return false;
+      } finally {
+        if (sourceSpatialRequest === controller) {
+          sourceSpatialRequest = undefined;
+          sourceSpatialRequestKey = undefined;
+        }
+      }
+    }
+
     async function applyLod(): Promise<void> {
+      if (source) {
+        if (!focusAt) return;
+
+        // Exact local Systems and the tapered h-boxel neighborhood are
+        // independent residency layers. Publish either as soon as it is ready
+        // and retain the other layer while its replacement is generated.
+        if (cameraDistanceLy < 180) {
+          if (await ensureSourceLocal()) paint();
+          if (await ensureSourceSpatial()) paint();
+          return;
+        }
+
+        if (source.loadSpatialTiles) {
+          if (await ensureSourceSpatial()) {
+            sourceLocalSystems = [];
+            committedLocalRequestKey = undefined;
+            paint();
+          }
+          return;
+        }
+        if (cameraDistanceLy >= 8_000) {
+          sourceLocalRequest?.abort();
+          return;
+        }
+        await ensureSourceLocal();
+        return;
+      }
       const keep = wantedUrls();
       if (lod === "all") {
         for (const cell of cells) await ensureTile(cell);
@@ -183,69 +356,219 @@ export const ED3DM = {
       unloadExcept(keep);
     }
 
+    if (source?.loadOverview) {
+      sourceOverviewRequest = new AbortController();
+      const loadedOverview = await source.loadOverview(
+        { lod },
+        sourceOverviewRequest.signal,
+      );
+      sourceOverviewSystems = loadedOverview.systems;
+    }
     await applyLod();
 
+    function overviewCount(): number {
+      // The coverage-first overview is the far-field floor. Numeric LOD only
+      // changes the additional camera-resident detail; it must not thin the
+      // galaxy envelope below the complete 50k overview.
+      return sourceOverviewSystems.length;
+    }
+
+    function systemKey(system: System): string {
+      return system.id64 === undefined
+        ? `${system.name}\0${system.coords.x}\0${system.coords.y}\0${system.coords.z}`
+        : String(system.id64);
+    }
+
     function allSystems(): System[] {
-      return [...tileCache.values()].flat();
+      if (!source) return [...tileCache.values()].flat();
+      const merged = new Map<string, System>();
+      for (const system of sourceOverviewSystems.slice(0, overviewCount())) {
+        merged.set(systemKey(system), system);
+      }
+      for (const tile of sourceSpatialTiles) {
+        for (const system of tile.systems) {
+          merged.set(systemKey(system), system);
+        }
+      }
+      for (const system of sourceLocalSystems) {
+        merged.set(systemKey(system), system);
+      }
+      if (selected) merged.set(systemKey(selected), selected);
+      return [...merged.values()];
     }
 
     function visible(): System[] {
       const all = allSystems();
-      if (!categoryFilter?.length) return all;
       return all.filter((s) => {
-        if (!s.cat?.length) return true;
-        return s.cat.some((c) => categoryFilter!.includes(c));
+        const categoryMatch =
+          !categoryFilter?.length ||
+          !s.cat?.length ||
+          s.cat.some((c) => categoryFilter!.includes(c));
+        const generationMatch =
+          !generationFilter?.length ||
+          (s.generation !== undefined && generationFilter.includes(s.generation));
+        const stellarTypeMatch =
+          !stellarTypeFilter?.length ||
+          (s.stellarType !== undefined && stellarTypeFilter.includes(s.stellarType));
+        return categoryMatch && generationMatch && stellarTypeMatch;
       });
     }
 
     let scene: SceneHandle | undefined;
+    let lastVisibleCount = -1;
+    let lastVisibleDetailCount = -1;
     function paint() {
       const shown = visible();
-      if (selected && !shown.some((s) => s.name === selected!.name)) {
-        selected = undefined;
+      const detailKeys = new Set<string>();
+      const densityWeights = new Map<string, number>();
+      for (const system of sourceOverviewSystems) {
+        densityWeights.set(systemKey(system), 1);
       }
-      const loadedCellIds = new Set(
-        cells
-          .filter(
-            (c) =>
-              c.tile &&
-              loaded.has(tileUrl(options.catalog.tileBaseUrl, c.tile)),
-          )
-          .map((c) => c.id),
+      const maximumTilePopulationWeight = Math.max(
+        0,
+        ...sourceSpatialTiles.map(({ populationWeight }) => populationWeight),
       );
+      for (const tile of sourceSpatialTiles) {
+        const densityWeight = maximumTilePopulationWeight > 0
+          ? Math.max(0.12, tile.populationWeight / maximumTilePopulationWeight)
+          : 0.12;
+        for (const system of tile.systems) {
+          const key = systemKey(system);
+          detailKeys.add(key);
+          densityWeights.set(key, Math.max(densityWeights.get(key) ?? 0, densityWeight));
+        }
+      }
+      for (const system of sourceLocalSystems) {
+        const key = systemKey(system);
+        detailKeys.add(key);
+        densityWeights.set(key, 0);
+      }
+      if (selected) {
+        const key = systemKey(selected);
+        detailKeys.add(key);
+        densityWeights.set(key, 0);
+      }
+      const shownDetailCount = shown.reduce(
+        (count, system) => count + Number(detailKeys.has(systemKey(system))),
+        0,
+      );
+      if (
+        shown.length !== lastVisibleCount ||
+        shownDetailCount !== lastVisibleDetailCount
+      ) {
+        lastVisibleCount = shown.length;
+        lastVisibleDetailCount = shownDetailCount;
+        options.onVisibleSystemsChange?.(shown.length, shownDetailCount);
+      }
       scene?.sync({
-        cells,
         systems: shown,
         colors: shown.map((s) =>
           theme === "realistic" && colorBy === "none"
-            ? spectralColor(s.name)
+            ? (s.stellarColor ?? "#fff4ea")
+            : theme === "charcoal" && colorBy === "none"
+              ? "#eceae4"
             : colorFor(s, colorBy),
         ),
+        details: shown.map((system) => detailKeys.has(systemKey(system))),
+        densityWeights: shown.map(
+          (system) => densityWeights.get(systemKey(system)) ?? 0,
+        ),
         selected,
-        hideImpostors: lod === "all",
-        loadedCellIds,
         routes,
         grid: showGrid,
         regionGrid: showRegionGrid,
-        backdrop: showBackdrop,
         theme,
       });
+    }
+
+    function acceptView(view: GalaxyCameraView) {
+      cameraView = view;
+      cameraDistanceLy = view.distanceLy;
+      focusAt = view.target;
+    }
+
+    async function drainViewLod() {
+      if (viewLoadRunning) return;
+      viewLoadRunning = true;
+      try {
+        do {
+          viewLoadQueued = false;
+          await applyLod();
+          if (!viewLoadQueued) paint();
+        } while (viewLoadQueued);
+      } finally {
+        viewLoadRunning = false;
+      }
+    }
+
+    function scheduleViewLod(view: GalaxyCameraView, delayMs: number) {
+      acceptView(view);
+      viewLoadQueued = true;
+      if (viewIdleTimer !== undefined) clearTimeout(viewIdleTimer);
+      viewIdleTimer = setTimeout(() => {
+        viewIdleTimer = undefined;
+        void drainViewLod();
+      }, delayMs);
     }
 
     const map: Ed3dmMap = {
       async setLod(next) {
         lod = next;
+        paint();
+        abortSourceDetailRequests();
         await applyLod();
         paint();
       },
       async focus(coords) {
+        flyRevision += 1;
         focusAt = coords;
+        abortSourceDetailRequests();
         await applyLod();
         paint();
       },
       async flyTo(name) {
-        if (!searchIndex && options.catalog.searchIndexUrl) {
-          searchIndex = await loadJson(options.catalog.searchIndexUrl);
+        if (source) {
+          const revision = ++flyRevision;
+          if (viewIdleTimer !== undefined) {
+            clearTimeout(viewIdleTimer);
+            viewIdleTimer = undefined;
+          }
+          abortSourceDetailRequests();
+          const previews = await source.preview?.(name);
+          if (revision !== flyRevision) return undefined;
+          const preview = previews?.[0];
+          if (preview) {
+            focusAt = preview.coords;
+            cameraDistanceLy = Math.min(
+              cameraDistanceLy,
+              Math.hypot(22, 14, 52),
+            );
+            scene?.flyCamera(preview.coords);
+            scene?.setPlaneHeight(preview.coords.y);
+            paint();
+            void applyLod().then(() => {
+              if (revision === flyRevision) paint();
+            });
+          }
+          const sys = await source.resolve(name);
+          if (revision !== flyRevision) return undefined;
+          if (!sys) return undefined;
+          focusAt = sys.coords;
+          cameraDistanceLy = Math.min(
+            cameraDistanceLy,
+            Math.hypot(22, 14, 52),
+          );
+          selected = sys;
+          options.onSystemClick?.(sys);
+          scene?.flyCamera(sys.coords);
+          paint();
+          void applyLod().then(() => {
+            if (revision === flyRevision) paint();
+          });
+          return sys;
+        }
+        if (!searchIndex && catalog?.searchIndexUrl) {
+          searchIndex = await loadJson(catalog.searchIndexUrl);
         }
         const hit = searchIndex?.[name];
         const cell =
@@ -260,7 +583,7 @@ export const ED3DM = {
           : { x: cell.cx, y: cell.cy, z: cell.cz };
         await applyLod();
         const systems = tileCache.get(
-          tileUrl(options.catalog.tileBaseUrl, cell.tile),
+          tileUrl(catalog?.tileBaseUrl, cell.tile),
         ) ?? (await ensureTile(cell));
         const sys = systems.find((s) => s.name === name);
         selected = sys;
@@ -273,6 +596,8 @@ export const ED3DM = {
       },
       setFilter(filter) {
         categoryFilter = filter.categories;
+        generationFilter = filter.generations;
+        stellarTypeFilter = filter.stellarTypes;
         paint();
       },
       setColorBy(mode) {
@@ -287,14 +612,16 @@ export const ED3DM = {
         showRegionGrid = on;
         paint();
       },
-      setBackdrop(on) {
-        showBackdrop = on;
-        paint();
-      },
       setTheme(next) {
         theme = next;
-        scene?.setTheme(next);
-        paint();
+        // Theme buttons can be clicked much faster than WebGPU can retire old
+        // render resources. Coalesce a burst into one scene repaint so browser
+        // GPU processes are not flooded with dispose/recreate work.
+        if (themePaintTimer !== undefined) clearTimeout(themePaintTimer);
+        themePaintTimer = setTimeout(() => {
+          themePaintTimer = undefined;
+          paint();
+        }, 80);
       },
       setPlaneHeight(y) {
         scene?.setPlaneHeight(y);
@@ -309,16 +636,23 @@ export const ED3DM = {
         scene?.resetTopView();
       },
       clearSelection() {
+        flyRevision += 1;
         selected = undefined;
         options.onSystemClick?.(undefined);
         paint();
       },
       destroy() {
+        if (themePaintTimer !== undefined) clearTimeout(themePaintTimer);
+        if (viewIdleTimer !== undefined) clearTimeout(viewIdleTimer);
+        sourceOverviewRequest?.abort();
+        abortSourceDetailRequests();
+        source?.destroy();
         scene?.destroy();
         scene = undefined;
         el.replaceChildren();
         loaded.clear();
         tileCache.clear();
+        sourceSpatialTiles = [];
         selected = undefined;
       },
       loadedTiles() {
@@ -336,7 +670,14 @@ export const ED3DM = {
       orbColor(name) {
         const sys = visible().find((s) => s.name === name);
         if (!sys) return undefined;
+        if (theme === "realistic" && colorBy === "none") {
+          return sys.stellarColor ?? "#fff4ea";
+        }
+        if (theme === "charcoal" && colorBy === "none") return "#eceae4";
         return colorFor(sys, colorBy);
+      },
+      suggest(query, limit) {
+        return source?.suggest(query, limit) ?? Promise.resolve([]);
       },
     };
 
@@ -356,9 +697,9 @@ export const ED3DM = {
         hasGpu = false;
       }
     }
-    if (options.catalog.routesUrl) {
+    if (catalog?.routesUrl) {
       try {
-        const data = await loadJson<{ routes?: Route[] }>(options.catalog.routesUrl);
+        const data = await loadJson<{ routes?: Route[] }>(catalog.routesUrl);
         routes = data.routes ?? [];
       } catch {
         routes = [];
@@ -368,6 +709,7 @@ export const ED3DM = {
     if (hasGpu) {
       try {
         scene = await attachScene(el, {
+          initialTheme: theme,
           onSelectSystem(index) {
             const sys = visible()[index];
             if (!sys) return;
@@ -375,6 +717,18 @@ export const ED3DM = {
             options.onSystemClick?.(sys);
             scene?.flyCamera(sys.coords);
             paint();
+            if (
+              source &&
+              sys.id64 !== undefined &&
+              sys.name.startsWith("ID64 ")
+            ) {
+              void source.resolveDisplayName(String(sys.id64)).then((name) => {
+                if (!name || String(selected?.id64) !== String(sys.id64)) return;
+                sys.name = name;
+                options.onSystemClick?.(sys);
+                paint();
+              });
+            }
           },
           onPickCell(coords) {
             if (selected) {
@@ -384,8 +738,19 @@ export const ED3DM = {
             }
             void map.focus(coords);
           },
-          onViewIdle(coords, distance) {
-            if (distance < 8000) void map.focus(coords);
+          onViewChange(view) {
+            if (!source) return;
+            scheduleViewLod(view, 35);
+          },
+          onViewIdle(view) {
+            if (!source) {
+              acceptView(view);
+              if (view.distanceLy < 8_000) void map.focus(view.target);
+              return;
+            }
+            acceptView(view);
+            abortSourceDetailRequests();
+            scheduleViewLod(view, 0);
           },
           onPlaneHeight(y) {
             options.onPlaneHeight?.(y);
@@ -395,9 +760,15 @@ export const ED3DM = {
           },
           viewCompass: options.viewCompass,
         });
+        cameraView = scene.viewState();
+        cameraDistanceLy = cameraView.distanceLy;
+        focusAt = cameraView.target;
         paint();
+        if (source?.loadSpatialTiles) {
+          void applyLod().then(paint);
+        }
       } catch {
-        // catalog API still works without a GPU
+        // The data interface still works without a GPU.
       }
     }
 

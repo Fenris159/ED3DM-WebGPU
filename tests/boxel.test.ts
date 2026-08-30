@@ -10,6 +10,7 @@ import {
   boxelGridXs,
   clampMassCode,
   containingBoxel,
+  effectiveBoxelMassCode,
   finestMassCode,
   massCodeIndex,
   onBoxelLattice,
@@ -141,6 +142,11 @@ describe("Elite mass-code boxels", () => {
     expect(clampMassCode("h", "a")).toBe("h");
   });
 
+  it("keeps the user's selected boxel code fixed while zoom changes", () => {
+    expect(effectiveBoxelMassCode("a", "h")).toBe("a");
+    expect(effectiveBoxelMassCode("d", "a")).toBe("d");
+  });
+
   it("does not put Sol on an a-boxel corner — Stellar Forge origin is offset", () => {
     const a = boxelSize("a");
     expect(onBoxelLattice(0, BOXEL_ORIGIN.x, a)).toBe(false);
@@ -167,4 +173,3 @@ describe("Elite mass-code boxels", () => {
     expect(snapDown(0, BOXEL_ORIGIN.x, 80)).toBe(-65);
   });
 });
-

@@ -44,6 +44,11 @@ export type BoxelWindow = {
 
 export type EliteCoords = { x: number; y: number; z: number };
 
+/** Straight-line light-year distance from Sol in raw Elite space. */
+export function distanceFromSol(coords: EliteCoords): number {
+  return Math.hypot(coords.x, coords.y, coords.z);
+}
+
 export function boxelSize(code: MassCode): number {
   return 10 * 2 ** (code.charCodeAt(0) - 97);
 }
@@ -133,6 +138,14 @@ export function finestMassCode(
 /** If `code` is finer than `finest`, bump up to `finest`. */
 export function clampMassCode(code: MassCode, finest: MassCode): MassCode {
   return massCodeIndex(code) < massCodeIndex(finest) ? finest : code;
+}
+
+/** The user's boxel filter is persistent; zoom only supplies a render recommendation. */
+export function effectiveBoxelMassCode(
+  selected: MassCode,
+  _recommended: MassCode,
+): MassCode {
+  return selected;
 }
 
 /**

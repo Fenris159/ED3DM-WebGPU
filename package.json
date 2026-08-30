@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "MIT",
-  "description": "Elite Dangerous 3D map library (WebGPU + WebGL2 fallback). Operators host their own Catalog.",
+  "description": "Elite Dangerous 3D galaxy interface powered by PEGE (WebGPU + WebGL2 fallback).",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -21,6 +21,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "pege": "github:Fenris159/PEGE#v1.6.0",
     "three": "^0.172.0"
   },
   "devDependencies": {

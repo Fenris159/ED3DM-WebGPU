@@ -74,25 +74,11 @@ export type ColorByMode =
   | "none";
 
 const DEFAULT_ORB = "#2e2e2c";
-const GRAYS = ["#1c1c1b", "#2e2e2c", "#4a4a46", "#6a6a64", "#8a8a84"] as const;
-const SPECTRAL = [
-  "#9bb0ff",
-  "#c5d4ff",
-  "#f4f1ff",
-  "#fff4ea",
-  "#ffd27a",
-  "#ff9a4a",
-  "#ff6848",
-] as const;
-
+const GRAYS = ["#080808", "#151514", "#242422", "#333330", "#444440"] as const;
 function hashName(name: string): number {
   let h = 0;
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0;
   return Math.abs(h);
-}
-
-export function spectralColor(name: string): string {
-  return SPECTRAL[hashName(name) % SPECTRAL.length] ?? SPECTRAL[4];
 }
 
 function indexColor(list: readonly string[], value: string | undefined): string {
@@ -132,8 +118,12 @@ export function colorFor(
   return hashCat(cat);
 }
 
-export function orbScale(population: number | undefined): number {
-  const POP = 1_000_000_000;
-  if (!population || population <= 0) return 130;
-  return Math.min(360, 50 * Math.max(population / POP, 1) * 2.6);
+export function orbScale(radiusMeters: number | undefined): number {
+  const DEFAULT = 90;
+  const SOLAR_RADIUS_METERS = 695_700_000;
+  if (!radiusMeters || !Number.isFinite(radiusMeters) || radiusMeters <= 0) {
+    return DEFAULT;
+  }
+  const relative = radiusMeters / SOLAR_RADIUS_METERS;
+  return Math.min(260, Math.max(48, DEFAULT * Math.pow(relative, 0.25)));
 }

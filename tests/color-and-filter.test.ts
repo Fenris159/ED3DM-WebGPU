@@ -25,6 +25,7 @@ const TILE = {
       allegiance: "Federation",
       government: "Democracy",
       cat: ["home"],
+      stellarColor: "#fff1a8",
     },
     {
       name: "Hutton",
@@ -91,11 +92,13 @@ describe("color-by and Category filters", () => {
       catalog: { overviewUrl: "/catalog/overview.json" },
     });
     map.setTheme("charcoal");
+    await map.focus({ x: 0, y: 0, z: 0 });
+    expect(map.orbColor("Sol")).toBe("#eceae4");
     map.setTheme("realistic");
+    expect(map.orbColor("Sol")).toBe("#fff1a8");
     map.setTheme("paper");
     map.setGrid(false);
     map.setRegionGrid(false);
-    map.setBackdrop(false);
     map.setPlaneHeight(120);
     map.setMassCode("h");
     expect(map.planeHeight()).toBe(0);
