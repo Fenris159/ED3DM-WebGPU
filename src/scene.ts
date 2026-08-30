@@ -19,6 +19,10 @@ import {
 import { orbScale } from "./palettes";
 import { makeRegionLayerAsync, tintRegionLayer } from "./region-labels";
 import { GALAXY_CORE } from "./regions";
+import {
+  stellarBrightnessScale,
+  stellarLuminositySolar,
+} from "./stellar-presentation";
 import type { GalaxyCameraView, Route, System, VisualTheme } from "./types";
 import { drawViewGizmo } from "./view-gizmo";
 
@@ -833,6 +837,15 @@ export async function attachScene(
           detail: nextDetails[i],
           selected: nextSelected[i],
           focused: nextFocused[i],
+          brightness:
+            (state.theme ?? theme) === "realistic"
+              ? stellarBrightnessScale(
+                  stellarLuminositySolar(
+                    s.stellarRadiusMeters,
+                    s.stellarTemperatureKelvin,
+                  ),
+                )
+              : 1,
         })),
         new THREE.Color(0x2e2e2c),
         { maxPx: 12, additive },

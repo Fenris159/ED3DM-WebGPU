@@ -1,4 +1,5 @@
 import { distanceFromSol } from "../src/boxel";
+import { stellarLuminositySolar } from "../src/stellar-presentation";
 import type { StellarComponentDetails, System } from "../src/types";
 
 export type StellarFilterChoice = {
@@ -97,11 +98,26 @@ const DETAILED_CLASS_NAMES: Readonly<Record<string, string>> = {
 };
 
 export function detailedStellarClass(component: StellarComponentDetails): string {
-  const base = DETAILED_CLASS_NAMES[component.starType] ?? component.starType;
+  const detailed = DETAILED_CLASS_NAMES[component.starType];
+  const base = detailed ?? component.starType;
   const subclass = component.subclass === undefined ? "" : String(component.subclass);
   const luminosity = component.luminosityClass
     ? ` ${component.luminosityClass}`
     : "";
+  if (detailed) {
+    const spectralPrefix = component.starType.match(/^[OBAFGKM]/)?.[0];
+    const classification = spectralPrefix
+      ? `${spectralPrefix}${subclass}${luminosity}`.trim()
+      : [
+          component.subclass === undefined
+            ? undefined
+            : `subclass ${component.subclass}`,
+          component.luminosityClass
+            ? `luminosity ${component.luminosityClass}`
+            : undefined,
+        ].filter(Boolean).join(" · ");
+    return classification ? `${base} · ${classification}` : base;
+  }
   return `${base}${subclass}${luminosity}`;
 }
 
@@ -116,6 +132,13 @@ function escapeHtml(value: unknown): string {
 
 function number(value: number, maximumFractionDigits = 3): string {
   return new Intl.NumberFormat("en-US", { maximumFractionDigits }).format(value);
+}
+
+function luminosity(value: number | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  return `${new Intl.NumberFormat("en-US", {
+    maximumSignificantDigits: 4,
+  }).format(value)} L☉`;
 }
 
 function row(label: string, value: string | undefined): string {
@@ -173,6 +196,11 @@ function componentDetails(
     row("Absolute magnitude", component.absoluteMagnitude === undefined
       ? undefined
       : number(component.absoluteMagnitude, 3)),
+    row("Luminosity", luminosity(stellarLuminositySolar(
+      component.radiusMeters,
+      component.surfaceTemperatureKelvin,
+      component.absoluteMagnitude,
+    ))),
     row("Age", component.ageMyr === undefined
       ? undefined
       : `${number(component.ageMyr, 2)} Myr`),

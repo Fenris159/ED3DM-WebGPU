@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { STELLAR_TYPES } from "pege";
 import {
   STELLAR_FILTER_GROUPS,
+  detailedStellarClass,
   renderSystemDetails,
   stellarTypesForFilterKeys,
 } from "../demo/stellar-ui";
@@ -18,6 +20,25 @@ describe("stellar details and filters", () => {
     expect(stellarTypesForFilterKeys(["proto", "wolf-rayet", "carbon"])).toEqual(
       expect.arrayContaining(["TTS", "AeBe", "W", "WN", "WC", "WO", "C", "CN", "S"]),
     );
+    const mapped = new Set(
+      STELLAR_FILTER_GROUPS.flatMap(({ choices }) =>
+        choices.flatMap(({ types }) => types),
+      ),
+    );
+    const supported = new Set<string>(STELLAR_TYPES);
+    expect(STELLAR_TYPES.filter((type) => !mapped.has(type))).toEqual([
+      "RoguePlanet",
+      "Nebula",
+      "StellarRemnantNebula",
+    ]);
+    expect([...mapped].filter((type) => !supported.has(type))).toEqual([]);
+    expect(detailedStellarClass({
+      bodyId: 0,
+      starType: "M_RedGiant",
+      subclass: 3,
+      luminosityClass: "III",
+      validation: "exact",
+    })).toBe("M red giant · M3 III");
   });
 
   it("renders present primary and secondary details without missing-value or provenance noise", () => {
@@ -61,6 +82,8 @@ describe("stellar details and filters", () => {
     expect(html).toContain("M4 V");
     expect(html).toContain("5,778 K");
     expect(html).toContain("Absolute magnitude");
+    expect(html).toContain("Luminosity");
+    expect(html).toContain("1 L☉");
     expect(html).not.toContain("Generation");
     expect(html).not.toContain("Profile");
     expect(html).not.toContain("not supplied");

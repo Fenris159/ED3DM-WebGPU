@@ -46,6 +46,7 @@ export type OrbItem = {
   detail?: boolean;
   selected?: boolean;
   focused?: boolean;
+  brightness?: number;
 };
 
 export const GALAXY_DENSITY_REFERENCE_SYSTEMS = 400_000_000_000;
@@ -455,8 +456,9 @@ class SoftDiscMaterial extends InstancedPointsNodeMaterial {
           cameraSide,
           viewTarget,
         );
-    this.pointColorNode = attribute("instanceColor").mul(
-      mix(
+    this.pointColorNode = attribute("instanceColor")
+      .mul(attribute("instanceBrightness", "float"))
+      .mul(mix(
         float(0.9),
         float(1.65),
         smoothstep(
@@ -464,8 +466,7 @@ class SoftDiscMaterial extends InstancedPointsNodeMaterial {
           float(1),
           attribute("instanceVisibility", "float"),
         ),
-      ),
-    );
+      ));
   }
 
   setup(builder: Parameters<NodeMaterial["setup"]>[0]) {
@@ -520,8 +521,9 @@ function hardDiscMaterial(
     cameraSide,
     viewTarget,
   );
-  mat.pointColorNode = attribute("instanceColor").mul(
-    mix(
+  mat.pointColorNode = attribute("instanceColor")
+    .mul(attribute("instanceBrightness", "float"))
+    .mul(mix(
       float(0.9),
       float(1.65),
       smoothstep(
@@ -529,8 +531,7 @@ function hardDiscMaterial(
         float(1),
         attribute("instanceVisibility", "float"),
       ),
-    ),
-  );
+    ));
   return mat;
 }
 
@@ -611,6 +612,7 @@ export function orbCloud(
   const detail = new Float32Array(items.length);
   const selected = new Float32Array(items.length);
   const focused = new Float32Array(items.length);
+  const brightness = new Float32Array(items.length);
   const cols = new Float32Array(items.length * 3);
   const tint = new Color();
   items.forEach((p, i) => {
@@ -623,6 +625,7 @@ export function orbCloud(
     detail[i] = p.detail ? 1 : 0;
     selected[i] = p.selected ? 1 : 0;
     focused[i] = p.focused ? 1 : 0;
+    brightness[i] = p.brightness ?? 1;
     if (p.hex) tint.set(p.hex);
     else tint.copy(color);
     cols[i * 3] = tint.r;
@@ -644,6 +647,10 @@ export function orbCloud(
   geo.setAttribute("instanceDetail", new InstancedBufferAttribute(detail, 1));
   geo.setAttribute("instanceSelected", new InstancedBufferAttribute(selected, 1));
   geo.setAttribute("instanceFocused", new InstancedBufferAttribute(focused, 1));
+  geo.setAttribute(
+    "instanceBrightness",
+    new InstancedBufferAttribute(brightness, 1),
+  );
   const viewDistance = uniform(30_000);
   const planeY = uniform(0);
   const hasSelection = uniform(0);

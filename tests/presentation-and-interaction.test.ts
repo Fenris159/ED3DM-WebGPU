@@ -1,6 +1,11 @@
 import { readFileSync } from "node:fs";
+import { Color } from "three";
 import { describe, expect, it, vi } from "vitest";
 import { ED3DM } from "../src/index";
+import {
+  stellarBrightnessScale,
+  stellarLuminositySolar,
+} from "../src/stellar-presentation";
 import {
   cameraProximityOpacity,
   focusedOrbDiameterCap,
@@ -10,6 +15,7 @@ import {
   densityFieldOpacity,
   representedSystemsPerOverviewPoint,
   galaxyOrbVisibilityScale,
+  orbCloud,
   orbPickRadiusWorld,
   projectedOrbDiameter,
   stableOrbVisibility,
@@ -33,6 +39,23 @@ import {
 import type { GalaxyRegionRequest, GalaxySource, System } from "../src/types";
 
 describe("galaxy presentation and interaction regressions", () => {
+  it("derives a bounded realistic brightness from factual stellar luminosity", () => {
+    expect(stellarLuminositySolar(695_700_000, 5_772)).toBeCloseTo(1, 6);
+    expect(stellarLuminositySolar(undefined, undefined, 4.83)).toBeCloseTo(1, 6);
+    expect(stellarBrightnessScale(undefined)).toBe(1);
+    expect(stellarBrightnessScale(0.0001)).toBeLessThan(1);
+    expect(stellarBrightnessScale(10_000)).toBeGreaterThan(1);
+    expect(stellarBrightnessScale(1_000_000_000)).toBeLessThanOrEqual(1.7);
+    const cloud = orbCloud([
+      { x: 0, y: 0, z: 0, r: 90, brightness: 1.4 },
+      { x: 1, y: 0, z: 0, r: 90 },
+    ], new Color(0xffffff), { maxPx: 12 });
+    const brightness = cloud.geometry.getAttribute("instanceBrightness");
+    expect(brightness.getX(0)).toBeCloseTo(1.4);
+    expect(brightness.getX(1)).toBe(1);
+    cloud.geometry.dispose();
+  });
+
   it("fades and click-masks camera-side foreground stars without hiding the target plane", () => {
     const camera = { x: 0, y: 100, z: 0 };
     const target = { x: 0, y: 0, z: 0 };
