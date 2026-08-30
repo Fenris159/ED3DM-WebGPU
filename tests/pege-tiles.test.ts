@@ -188,8 +188,9 @@ describe("PEGE spatial tile view", () => {
     expect(Math.max(...plan.map(({ key }) => key.z))).toBeGreaterThan(center.z);
   });
 
-  it("radiates complete H, G, F, and E detail tiers around all four planar sides", () => {
-    const shells = radialMassCodeShellPlan({ x: 635, y: 635, z: 635 });
+  it("centers complete H, G, F, and E detail tiers around all six sides of the focus", () => {
+    const focus = { x: 635, y: -73, z: 219 };
+    const shells = radialMassCodeShellPlan(focus);
     expect(shells.map(({ tier }) => tier)).toEqual(["h", "g", "f", "e"]);
     expect(shells.map(({ weight }) => weight)).toEqual([1, 0.45, 0.25, 0.12]);
     expect(shells.map(({ outerBounds }) =>
@@ -200,7 +201,12 @@ describe("PEGE spatial tile view", () => {
     )).toEqual([1_280, 2_560, 3_200, 3_520]);
     expect(shells.map(({ outerBounds }) =>
       outerBounds.maximum.y - outerBounds.minimum.y,
-    )).toEqual([1_280, 1_280, 1_280, 1_280]);
+    )).toEqual([1_280, 2_560, 3_200, 3_520]);
+    expect(shells.every(({ outerBounds }) =>
+      (outerBounds.minimum.x + outerBounds.maximum.x) / 2 === focus.x &&
+      (outerBounds.minimum.y + outerBounds.maximum.y) / 2 === focus.y &&
+      (outerBounds.minimum.z + outerBounds.maximum.z) / 2 === focus.z,
+    )).toBe(true);
     expect(shells.every(({ keys }) =>
       keys.length > 0 && keys.length <= MAX_VISIBLE_PEGE_TILES,
     )).toBe(true);
@@ -209,20 +215,46 @@ describe("PEGE spatial tile view", () => {
     const hBounds = h!.outerBounds;
     const centerX = (hBounds.minimum.x + hBounds.maximum.x) / 2;
     const centerZ = (hBounds.minimum.z + hBounds.maximum.z) / 2;
-    expect(radialMassCodeShellContains(h!, { x: centerX, y: 635, z: centerZ })).toBe(true);
-    expect(radialMassCodeShellContains(g!, { x: hBounds.minimum.x - 1, y: 635, z: centerZ })).toBe(true);
-    expect(radialMassCodeShellContains(g!, { x: hBounds.maximum.x, y: 635, z: centerZ })).toBe(true);
-    expect(radialMassCodeShellContains(g!, { x: centerX, y: 635, z: hBounds.minimum.z - 1 })).toBe(true);
-    expect(radialMassCodeShellContains(g!, { x: centerX, y: 635, z: hBounds.maximum.z })).toBe(true);
-    expect(radialMassCodeShellContains(g!, { x: 635, y: 635, z: 635 })).toBe(false);
+    expect(radialMassCodeShellContains(h!, focus)).toBe(true);
+    expect(radialMassCodeShellContains(g!, {
+      x: hBounds.minimum.x - 1,
+      y: focus.y,
+      z: centerZ,
+    })).toBe(true);
+    expect(radialMassCodeShellContains(g!, {
+      x: hBounds.maximum.x,
+      y: focus.y,
+      z: centerZ,
+    })).toBe(true);
+    expect(radialMassCodeShellContains(g!, {
+      x: centerX,
+      y: hBounds.minimum.y - 1,
+      z: centerZ,
+    })).toBe(true);
+    expect(radialMassCodeShellContains(g!, {
+      x: centerX,
+      y: hBounds.maximum.y,
+      z: centerZ,
+    })).toBe(true);
+    expect(radialMassCodeShellContains(g!, {
+      x: centerX,
+      y: focus.y,
+      z: hBounds.minimum.z - 1,
+    })).toBe(true);
+    expect(radialMassCodeShellContains(g!, {
+      x: centerX,
+      y: focus.y,
+      z: hBounds.maximum.z,
+    })).toBe(true);
+    expect(radialMassCodeShellContains(g!, focus)).toBe(false);
     expect(radialMassCodeShellContains(f!, {
       x: g!.outerBounds.minimum.x - 1,
-      y: 635,
+      y: focus.y,
       z: centerZ,
     })).toBe(true);
     expect(radialMassCodeShellContains(e!, {
       x: f!.outerBounds.minimum.x - 1,
-      y: 635,
+      y: focus.y,
       z: centerZ,
     })).toBe(true);
 

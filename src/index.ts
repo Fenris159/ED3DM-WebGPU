@@ -298,9 +298,19 @@ export const ED3DM = {
       if (totalTargetSystems === 0) return false;
       const shellTargets = radialMassCodeShellTargets(shells, totalTargetSystems);
       const requestKey = `tiles:${shells
-        .map((shell, index) =>
-          `${shell.tier}:${shell.keys.map(pegeTileKeyString).join(",")}@${shellTargets[index]}`,
-        )
+        .map((shell, index) => {
+          const { minimum, maximum } = shell.outerBounds;
+          const bounds = [
+            minimum.x,
+            minimum.y,
+            minimum.z,
+            maximum.x,
+            maximum.y,
+            maximum.z,
+          ].join(",");
+          const keys = shell.keys.map(pegeTileKeyString).join(",");
+          return `${shell.tier}:${bounds}:${keys}@${shellTargets[index]}`;
+        })
         .join("|")}`;
       if (requestKey === committedSpatialRequestKey) return true;
       if (requestKey === sourceSpatialRequestKey) return false;
@@ -373,8 +383,8 @@ export const ED3DM = {
         }
 
         // The selected System, or the camera focus on the current height plane,
-        // anchors one complete planar h/g/f/e residency stack. Each spatial
-        // tier is published as a coherent four-sided ring.
+        // anchors one complete 3D h/g/f/e residency stack. Each spatial tier
+        // is published as a coherent shell around that exact focus.
         if (cameraDistanceLy <= FULL_DETAIL_CAMERA_DISTANCE_LY) {
           if (await ensureSourceLocal()) paint();
           if (await ensureSourceSpatial()) paint();

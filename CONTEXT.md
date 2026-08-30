@@ -81,8 +81,8 @@ A stable PEGE world-space volume that contributes a population-guided sample of 
 _Avoid_: camera bubble, catalogue tile, renderer chunk
 
 **Radial mass-code residency**:
-A planar local-detail stack anchored to the last selected System, or otherwise to the camera's X/Z focus at the current height. The focused 1,280-ly h boxel receives the full local share; successively thinner g-, f-, and e-width bands surround it on all four X/Z sides with decreasing shares. PEGE's stable storage keys remain h-sized, and ED3DM clips genuine results into each complete geometric band before publishing it.
-_Avoid_: frustum-directed wedges; partially published bands; moving generated Systems
+A volumetric local-detail stack centered on the last selected System, or otherwise on the camera's X/Z focus at the current height. The centered 1,280-ly h-sized cube receives the full local share; successively thinner g-, f-, and e-width shells surround it on all six sides with decreasing shares. PEGE's stable storage keys remain h-sized, and ED3DM clips genuine results into each complete geometric shell before publishing it.
+_Avoid_: fixed height layers; frustum-directed wedges; partially published shells; moving generated Systems
 
 **Exact local detail**:
 Complete real-System enumeration inside a deliberately small area used at the closest map scale.

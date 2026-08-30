@@ -37,11 +37,11 @@ export type RadialMassCodeShell = {
 };
 
 /**
- * Camera-local residency is anchored to the focused h boxel, not the frustum.
- * The canonical PEGE storage tiles remain h-sized. G/F/E define successively
- * smaller geometric expansion bands around the focused Forge h boxel; PEGE
- * tile results are clipped into those bands after generation. Every band spans
- * all four X/Z sides at one Y layer and receives a smaller stable prefix.
+ * Camera-local residency is centered on the focus, not the frustum or the
+ * containing Forge boxel's origin. The canonical PEGE storage tiles remain
+ * h-sized. G/F/E define successively smaller geometric expansion bands around
+ * the focused h-sized cube; PEGE tile results are clipped into complete 3D
+ * shells after generation. Every shell receives a smaller stable prefix.
  */
 export function radialMassCodeShellPlan(
   target: { x: number; y: number; z: number },
@@ -55,12 +55,17 @@ export function radialMassCodeShellPlan(
   ];
   let innerBounds: GalaxyViewBounds | undefined;
   return tiers.map(({ tier, expansion, weight }) => {
+    const halfEdge = h.size / 2 + expansion;
     const outerBounds: GalaxyViewBounds = {
-      minimum: { x: h.ox - expansion, y: h.oy, z: h.oz - expansion },
+      minimum: {
+        x: target.x - halfEdge,
+        y: target.y - halfEdge,
+        z: target.z - halfEdge,
+      },
       maximum: {
-        x: h.ox + h.size + expansion,
-        y: h.oy + h.size,
-        z: h.oz + h.size + expansion,
+        x: target.x + halfEdge,
+        y: target.y + halfEdge,
+        z: target.z + halfEdge,
       },
     };
     const shell: RadialMassCodeShell = {
@@ -88,6 +93,7 @@ export function radialMassCodeShellContains(
   const inner = shell.innerBounds;
   return !inner || (
     coords.x < inner.minimum.x || coords.x >= inner.maximum.x ||
+    coords.y < inner.minimum.y || coords.y >= inner.maximum.y ||
     coords.z < inner.minimum.z || coords.z >= inner.maximum.z
   );
 }

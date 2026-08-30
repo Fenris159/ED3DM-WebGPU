@@ -828,13 +828,13 @@ describe("PEGE galaxy adapter", () => {
     const target: System = {
       name: "Target",
       id64: "2",
-      coords: { x: 0, y: 0, z: 0 },
+      coords: { x: 100, y: 0, z: 0 },
       generation: "ordinary",
     };
     const exactNeighbor: System = {
       name: "Exact neighbor",
       id64: "3",
-      coords: { x: 4, y: 2, z: 3 },
+      coords: { x: 104, y: 2, z: 3 },
       generation: "ordinary",
     };
     const hNeighbor: System = {
@@ -846,25 +846,25 @@ describe("PEGE galaxy adapter", () => {
     const gNeighbor: System = {
       name: "G neighbor",
       id64: "5",
-      coords: { x: -100, y: 200, z: 500 },
+      coords: { x: 0, y: 800, z: 0 },
       generation: "ordinary",
     };
     const fNeighbor: System = {
       name: "F neighbor",
       id64: "6",
-      coords: { x: -800, y: 200, z: 0 },
+      coords: { x: 0, y: 0, z: 1_400 },
       generation: "ordinary",
     };
     const eNeighbor: System = {
       name: "E neighbor",
       id64: "7",
-      coords: { x: -1_100, y: 200, z: 0 },
+      coords: { x: 1_780, y: 0, z: 0 },
       generation: "ordinary",
     };
     const spatialNeighbors = [hNeighbor, gNeighbor, fNeighbor, eNeighbor];
     let spatialCall = 0;
     const loadSpatialTiles = vi.fn(async (request: GalaxySpatialTileRequest) => {
-      const system = spatialNeighbors[spatialCall++]!;
+      const system = spatialNeighbors[spatialCall++ % spatialNeighbors.length]!;
       return [{
         key: `${request.keys[0]!.level}/${request.keys[0]!.x}/${request.keys[0]!.y}/${request.keys[0]!.z}`,
         tileKey: request.keys[0]!,
@@ -922,6 +922,12 @@ describe("PEGE galaxy adapter", () => {
           index === 0 || range.start >= progressRanges[index - 1]!.end,
       ),
     ).toBe(true);
+
+    await map.setLod("all");
+    expect(loadSpatialTiles).toHaveBeenCalledTimes(4);
+    map.clearSelection();
+    await map.focus({ x: 110, y: 0, z: 0 });
+    expect(loadSpatialTiles).toHaveBeenCalledTimes(8);
     map.destroy();
   });
 
