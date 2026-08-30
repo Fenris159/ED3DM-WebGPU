@@ -122,6 +122,63 @@ export function planarPanDelta(
     z: -dxPx * worldPerPixel * right.z + dyPx * worldPerPixel * forward.z,
   };
 }
+
+export function createSceneResizeScheduler(
+  measure: () => { width: number; height: number },
+  apply: (width: number, height: number) => void,
+  schedule: (callback: () => void) => number = (callback) =>
+    window.setTimeout(callback, 120),
+  cancel: (handle: number) => void = (handle) => window.clearTimeout(handle),
+): { request: () => void; destroy: () => void } {
+  let resizeTimer: number | undefined;
+  let destroyed = false;
+  let lastWidth = -1;
+  let lastHeight = -1;
+  const request = () => {
+    if (destroyed) return;
+    if (resizeTimer !== undefined) cancel(resizeTimer);
+    const scheduled = schedule(() => {
+      if (resizeTimer !== scheduled) return;
+      resizeTimer = undefined;
+      if (destroyed) return;
+      const measured = measure();
+      const width = Math.floor(measured.width);
+      const height = Math.floor(measured.height);
+      if (width <= 0 || height <= 0) return;
+      if (width === lastWidth && height === lastHeight) return;
+      lastWidth = width;
+      lastHeight = height;
+      apply(width, height);
+    });
+    resizeTimer = scheduled;
+  };
+  return {
+    request,
+    destroy() {
+      destroyed = true;
+      if (resizeTimer !== undefined) cancel(resizeTimer);
+      resizeTimer = undefined;
+    },
+  };
+}
+
+const MAX_SCENE_FRAMEBUFFER_PIXELS = 12_000_000;
+
+export function scenePixelRatio(
+  width: number,
+  height: number,
+  devicePixelRatio: number,
+): number {
+  const cssPixels = Math.max(1, width) * Math.max(1, height);
+  const maximumForArea = Math.sqrt(MAX_SCENE_FRAMEBUFFER_PIXELS / cssPixels);
+  const requested = Number.isFinite(devicePixelRatio)
+    ? Math.max(Number.EPSILON, devicePixelRatio)
+    : 1;
+  return Math.max(
+    Number.EPSILON,
+    Math.min(2, requested, maximumForArea),
+  );
+}
 export type SceneHandle = {
   sync: (state: {
     systems: System[];
@@ -238,9 +295,13 @@ export async function attachScene(
     alpha: false,
   });
   await renderer.init();
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  const initialWidth = container.clientWidth || 800;
+  const initialHeight = container.clientHeight || 600;
+  renderer.setPixelRatio(
+    scenePixelRatio(initialWidth, initialHeight, window.devicePixelRatio),
+  );
   renderer.setClearColor(initialBackground, 1);
-  renderer.setSize(container.clientWidth || 800, container.clientHeight || 600);
+  renderer.setSize(initialWidth, initialHeight, false);
 
   const controls = new OrbitControls(camera, canvas);
   let planeY = 0;
@@ -861,12 +922,19 @@ export async function attachScene(
   canvas.addEventListener("pointercancel", onPlanePanUp);
   canvas.addEventListener("contextmenu", onContextMenu);
 
+  const resize = createSceneResizeScheduler(
+    () => ({ width: container.clientWidth, height: container.clientHeight }),
+    (width, height) => {
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+      renderer.setPixelRatio(
+        scenePixelRatio(width, height, window.devicePixelRatio),
+      );
+      renderer.setSize(width, height, false);
+    },
+  );
   function onResize() {
-    const w = container.clientWidth || 800;
-    const h = container.clientHeight || 600;
-    camera.aspect = w / h;
-    camera.updateProjectionMatrix();
-    renderer.setSize(w, h);
+    resize.request();
   }
   window.addEventListener("resize", onResize);
 
@@ -874,7 +942,6 @@ export async function attachScene(
     ev.preventDefault();
   }
   function onContextRestored() {
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     onResize();
   }
   canvas.addEventListener("webglcontextlost", onContextLost);
@@ -991,6 +1058,7 @@ export async function attachScene(
     destroy() {
       cancelAnimationFrame(raf);
       if (viewChangeTimer !== undefined) clearTimeout(viewChangeTimer);
+      resize.destroy();
       window.removeEventListener("resize", onResize);
       canvas.removeEventListener("pointerdown", onPickPointerDown);
       canvas.removeEventListener("pointerup", onPickPointerUp);

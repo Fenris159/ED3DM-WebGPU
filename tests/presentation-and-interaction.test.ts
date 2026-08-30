@@ -25,6 +25,8 @@ import {
   selectionRailIndexes,
   railSelectableIndex,
   planarPanDelta,
+  createSceneResizeScheduler,
+  scenePixelRatio,
 } from "../src/scene";
 import type { GalaxyRegionRequest, GalaxySource, System } from "../src/types";
 
@@ -157,6 +159,60 @@ describe("galaxy presentation and interaction regressions", () => {
     const forward = { x: 0, z: 1 };
     expect(planarPanDelta(10, 0, 2, right, forward)).toEqual({ x: -20, z: 0 });
     expect(planarPanDelta(0, 10, 2, right, forward)).toEqual({ x: 0, z: 20 });
+  });
+
+  it("coalesces a resize storm into one renderer allocation using the final dimensions", () => {
+    let width = 1_200;
+    let height = 800;
+    let pending: (() => void) | undefined;
+    let handle = 0;
+    const apply = vi.fn();
+    const cancel = vi.fn();
+    const resize = createSceneResizeScheduler(
+      () => ({ width, height }),
+      apply,
+      (callback) => {
+        pending = callback;
+        handle += 1;
+        return handle;
+      },
+      cancel,
+    );
+
+    for (let index = 0; index < 100; index += 1) {
+      width = 1_200 + index;
+      height = index % 2 === 0 ? 0 : 800 + index;
+      resize.request();
+    }
+    expect(apply).not.toHaveBeenCalled();
+    expect(pending).toBeDefined();
+    expect(cancel).toHaveBeenCalledTimes(99);
+
+    height = 899;
+    pending!();
+    expect(apply).toHaveBeenCalledTimes(1);
+    expect(apply).toHaveBeenCalledWith(1_299, 899);
+
+    width = 0;
+    height = 0;
+    resize.request();
+    pending!();
+    expect(apply).toHaveBeenCalledTimes(1);
+
+    width = 1_400;
+    height = 900;
+    resize.request();
+    resize.destroy();
+    expect(cancel).toHaveBeenLastCalledWith(102);
+    pending!();
+    expect(apply).toHaveBeenCalledTimes(1);
+  });
+
+  it("caps resize framebuffer area on high-DPI displays", () => {
+    expect(scenePixelRatio(1_920, 1_080, 2)).toBe(2);
+    const large = scenePixelRatio(7_680, 4_320, 2);
+    expect(7_680 * 4_320 * large * large).toBeLessThanOrEqual(12_000_001);
+    expect(large).toBeGreaterThanOrEqual(0.5);
   });
 
   it("uses independent stable noise to diffuse far-field row energy", () => {
