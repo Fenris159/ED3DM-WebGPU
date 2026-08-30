@@ -121,6 +121,31 @@ describe("published PEGE representative galaxy view", () => {
       expect.objectContaining({ name: "Graea Hypue KE-E c13-41" }),
     );
   });
+  it("forwards modeled secondary stars and their physical and orbital details", () => {
+    const system = resolvePegeQuery(pege, "10577971419");
+    expect(system?.stellarType).toBe("A");
+    expect(system?.stellarLuminositySolar ?? 0).toBeGreaterThan(0);
+    expect(system?.stellarComponents).toHaveLength(2);
+    expect(system?.stellarComponents?.[1]).toEqual(expect.objectContaining({
+      bodyId: 1,
+      starType: "F",
+      validation: "estimated",
+      parents: [{ bodyType: "Star", bodyId: 0 }],
+    }));
+    expect(system?.stellarComponents?.[1]?.luminositySolar ?? 0).toBeGreaterThan(0);
+    expect(
+      system?.stellarComponents?.[1]?.orbitalElements?.semiMajorAxisMeters ?? 0,
+    ).toBeGreaterThan(0);
+  });
+  it("forwards rogue planets at their generated positions", () => {
+    const system = resolvePegeQuery(pege, "4103303088608");
+    expect(system).toEqual(expect.objectContaining({
+      id64: "4103303088608",
+      stellarType: "RoguePlanet",
+      coords: { x: -11773.96875, y: -124.25, z: -464.96875 },
+    }));
+    expect(system?.stellarComponents).toHaveLength(1);
+  });
   it("is aligned, deterministic, nested, exact, and presentation-balanced", async () => {
     const balancedPolicy = {
       mode: "presentation-balanced",

@@ -1,6 +1,10 @@
 import { distanceFromSol } from "../src/boxel";
 import { stellarLuminositySolar } from "../src/stellar-presentation";
-import type { StellarComponentDetails, System } from "../src/types";
+import type {
+  StellarComponentDetails,
+  System,
+  SystemFilter,
+} from "../src/types";
 
 export type StellarFilterChoice = {
   key: string;
@@ -10,7 +14,7 @@ export type StellarFilterChoice = {
 };
 
 export type StellarFilterGroup = {
-  label: "Scoopable" | "Not scoopable";
+  label: "Scoopable" | "Not scoopable" | "Extras";
   choices: readonly StellarFilterChoice[];
 };
 
@@ -65,6 +69,17 @@ export const STELLAR_FILTER_GROUPS: readonly StellarFilterGroup[] = [
       },
     ],
   },
+  {
+    label: "Extras",
+    choices: [
+      {
+        key: "rogue-planet",
+        label: "Rogue planets",
+        description: "Unbound planetary-mass objects",
+        types: ["RoguePlanet"],
+      },
+    ],
+  },
 ] as const;
 
 const CHOICE_BY_KEY = new Map(
@@ -76,6 +91,13 @@ const CHOICE_BY_KEY = new Map(
 
 export function stellarTypesForFilterKeys(keys: readonly string[]): string[] {
   return [...new Set(keys.flatMap((key) => CHOICE_BY_KEY.get(key)?.types ?? []))];
+}
+
+export function stellarFilterForKeys(keys: readonly string[]): SystemFilter {
+  if (keys.length === 0) {
+    return { excludedStellarTypes: ["RoguePlanet"] };
+  }
+  return { stellarTypes: stellarTypesForFilterKeys(keys) };
 }
 
 export function stellarFilterLabel(keys: readonly string[]): string {
@@ -95,6 +117,7 @@ const DETAILED_CLASS_NAMES: Readonly<Record<string, string>> = {
   M_RedSuperGiant: "M red supergiant",
   M_RedGiant: "M red giant",
   K_OrangeGiant: "K orange giant",
+  RoguePlanet: "Rogue planet",
 };
 
 export function detailedStellarClass(component: StellarComponentDetails): string {
@@ -165,6 +188,9 @@ function primaryFallback(system: System): StellarComponentDetails[] {
     ...(system.stellarTemperatureKelvin === undefined ? {} : {
       surfaceTemperatureKelvin: system.stellarTemperatureKelvin,
     }),
+    ...(system.stellarLuminositySolar === undefined ? {} : {
+      luminositySolar: system.stellarLuminositySolar,
+    }),
     ...(system.stellarColor === undefined ? {} : { stellarColor: system.stellarColor }),
     validation: system.stellarProfileValidation ?? "observed",
     ...(system.stellarValidation === undefined ? {} : {
@@ -196,7 +222,7 @@ function componentDetails(
     row("Absolute magnitude", component.absoluteMagnitude === undefined
       ? undefined
       : number(component.absoluteMagnitude, 3)),
-    row("Luminosity", luminosity(stellarLuminositySolar(
+    row("Luminosity", luminosity(component.luminositySolar ?? stellarLuminositySolar(
       component.radiusMeters,
       component.surfaceTemperatureKelvin,
       component.absoluteMagnitude,

@@ -149,6 +149,7 @@ export const ED3DM = {
     let categoryFilter: string[] | undefined;
     let generationFilter: System["generation"][] | undefined;
     let stellarTypeFilter: string[] | undefined;
+    let excludedStellarTypeFilter: string[] | undefined;
     let showGrid = true;
     let showRegionGrid = true;
     let theme: VisualTheme = options.theme ?? "realistic";
@@ -620,7 +621,15 @@ export const ED3DM = {
         const stellarTypeMatch =
           !stellarTypeFilter?.length ||
           (s.stellarType !== undefined && stellarTypeFilter.includes(s.stellarType));
-        return categoryMatch && generationMatch && stellarTypeMatch;
+        const stellarTypeExcluded =
+          s.stellarType !== undefined &&
+          Boolean(excludedStellarTypeFilter?.includes(s.stellarType));
+        return (
+          categoryMatch &&
+          generationMatch &&
+          stellarTypeMatch &&
+          !stellarTypeExcluded
+        );
       });
     }
 
@@ -842,6 +851,7 @@ export const ED3DM = {
         categoryFilter = filter.categories;
         generationFilter = filter.generations;
         stellarTypeFilter = filter.stellarTypes;
+        excludedStellarTypeFilter = filter.excludedStellarTypes;
         paint();
       },
       setColorBy(mode) {

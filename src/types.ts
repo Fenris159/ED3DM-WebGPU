@@ -9,6 +9,7 @@ export type StellarValidation = {
   mass?: StellarFieldValidation;
   temperature?: StellarFieldValidation;
   radius?: StellarFieldValidation;
+  luminosity?: StellarFieldValidation;
   displayColor?: StellarFieldValidation;
 };
 
@@ -43,6 +44,7 @@ export type StellarComponentDetails = {
   stellarMassSolar?: number;
   radiusMeters?: number;
   absoluteMagnitude?: number;
+  luminositySolar?: number;
   rotationPeriodSeconds?: number;
   surfaceTemperatureKelvin?: number;
   ageMyr?: number;
@@ -69,6 +71,7 @@ export type System = {
   stellarLuminosityClass?: string;
   stellarMassSolar?: number;
   stellarTemperatureKelvin?: number;
+  stellarLuminositySolar?: number;
   stellarProfileSource?: "compiled-catalogue" | "procedural-primary-model";
   stellarProfileValidation?: StellarFieldValidation;
   stellarValidation?: StellarValidation;
@@ -228,6 +231,7 @@ export type SystemFilter = {
   categories?: string[];
   generations?: GenerationKind[];
   stellarTypes?: string[];
+  excludedStellarTypes?: string[];
 };
 
 export type VisualTheme = "paper" | "charcoal" | "realistic";

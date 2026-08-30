@@ -438,6 +438,9 @@ function resolvedComponent(
     ...(component.absoluteMagnitude === undefined ? {} : {
       absoluteMagnitude: component.absoluteMagnitude,
     }),
+    ...(component.luminositySolar === undefined ? {} : {
+      luminositySolar: component.luminositySolar,
+    }),
     ...(component.rotationPeriodSeconds === undefined ? {} : {
       rotationPeriodSeconds: component.rotationPeriodSeconds,
     }),
@@ -473,6 +476,9 @@ function resolvedComponent(
       ...(component.radiusMeters === undefined ? {} : {
         radius: component.attributeValidation?.radiusMeters ?? validation,
       }),
+      ...(component.luminositySolar === undefined ? {} : {
+        luminosity: component.attributeValidation?.luminositySolar ?? validation,
+      }),
       ...(component.displayColor === undefined ? {} : {
         displayColor: component.attributeValidation?.displayColor ?? validation,
       }),
@@ -502,6 +508,7 @@ function withResolvedProfile(
     stellarLuminosityClass: primary.luminosityClass,
     stellarMassSolar: primary.stellarMassSolar,
     stellarTemperatureKelvin: primary.surfaceTemperatureKelvin,
+    stellarLuminositySolar: primary.luminositySolar,
     stellarProfileSource: resolution.source,
     stellarProfileValidation: primary.validation,
     stellarValidation: {
@@ -518,6 +525,10 @@ function withResolvedProfile(
         primary.radiusMeters === undefined
           ? undefined
           : (primary.attributeValidation?.radiusMeters ?? primary.validation),
+      luminosity:
+        primary.luminositySolar === undefined
+          ? undefined
+          : (primary.attributeValidation?.luminositySolar ?? primary.validation),
       displayColor:
         primary.displayColor === undefined
           ? undefined

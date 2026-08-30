@@ -840,7 +840,7 @@ export async function attachScene(
           brightness:
             (state.theme ?? theme) === "realistic"
               ? stellarBrightnessScale(
-                  stellarLuminositySolar(
+                  s.stellarLuminositySolar ?? stellarLuminositySolar(
                     s.stellarRadiusMeters,
                     s.stellarTemperatureKelvin,
                   ),

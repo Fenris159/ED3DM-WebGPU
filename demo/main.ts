@@ -16,7 +16,7 @@ import {
   STELLAR_FILTER_GROUPS,
   renderSystemDetails,
   stellarFilterLabel,
-  stellarTypesForFilterKeys,
+  stellarFilterForKeys,
 } from "./stellar-ui";
 
 const panel = document.querySelector("#panel") as HTMLElement;
@@ -56,7 +56,7 @@ let lodRevision = 0;
 let finestMassCode: MassCode = "h";
 let visibleDetailCount = 0;
 let detailLoadingHideTimer = 0;
-const pegeRuntimeV16Url = `${pegeRuntimeUrl}${pegeRuntimeUrl.includes("?") ? "&" : "?"}v=1.6.0`;
+const pegeRuntimeV17Url = `${pegeRuntimeUrl}${pegeRuntimeUrl.includes("?") ? "&" : "?"}v=1.7.0`;
 
 function syncHeightRailLayout() {
   const layout = heightRailLayout({
@@ -227,7 +227,7 @@ function updateCount() {
 
 async function main() {
   const source = new PegeGalaxySource({
-    runtimeUrl: pegeRuntimeV16Url,
+    runtimeUrl: pegeRuntimeV17Url,
     onProgress: updateEngineProgress,
   });
   map = await ED3DM.create({
@@ -249,6 +249,7 @@ async function main() {
     onDetailRendered: showDetailRendered,
     viewCompass: document.querySelector("#view-compass-canvas") as HTMLCanvasElement,
   });
+  map.setFilter(stellarFilterForKeys([]));
   setLoading(99, "Rendering the first galaxy frame");
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
@@ -408,7 +409,7 @@ async function main() {
     if (keys.length === 0) allFilter.checked = true;
     filterSummary.textContent = stellarFilterLabel(keys);
     filterSummary.title = filterSummary.textContent;
-    map.setFilter({ stellarTypes: stellarTypesForFilterKeys(keys) });
+    map.setFilter(stellarFilterForKeys(keys));
     updateCount();
   });
   grid.addEventListener("change", () => map.setGrid(grid.checked));

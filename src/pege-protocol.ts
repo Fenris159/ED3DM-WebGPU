@@ -85,6 +85,7 @@ export type ResolvedPegeSystem = {
   stellarLuminosityClass?: string;
   stellarMassSolar?: number;
   stellarTemperatureKelvin?: number;
+  stellarLuminositySolar?: number;
   stellarProfileSource?: "compiled-catalogue" | "procedural-primary-model";
   stellarProfileValidation?: "exact" | "observed" | "estimated";
   stellarValidation?: {
@@ -92,6 +93,7 @@ export type ResolvedPegeSystem = {
     mass?: "exact" | "observed" | "estimated";
     temperature?: "exact" | "observed" | "estimated";
     radius?: "exact" | "observed" | "estimated";
+    luminosity?: "exact" | "observed" | "estimated";
     displayColor?: "exact" | "observed" | "estimated";
   };
   stellarProfileComposition?: "complete" | "partial";

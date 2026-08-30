@@ -212,7 +212,7 @@ describe("PEGE galaxy adapter", () => {
       compositionVersion: "pege-final-systems-v2-display-names",
     });
     expect(pegeOverviewCacheId("/pege-runtime.bin", "https://example.test/map")).toBe(
-      `pege-1.6-spatial-v3:https://example.test/pege-runtime.bin:${GALAXY_SPATIAL_SELECTION_VERSION}:50000:42:presentation-balanced:1:-1280000,-160000,-451200:1283200,160000,2112000:pege-final-systems-v2-display-names`,
+      `pege-1.7-spatial-v4:https://example.test/pege-runtime.bin:${GALAXY_SPATIAL_SELECTION_VERSION}:50000:42:presentation-balanced:1:-1280000,-160000,-451200:1283200,160000,2112000:pege-final-systems-v2-display-names`,
     );
   });
 

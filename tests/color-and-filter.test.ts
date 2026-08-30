@@ -10,7 +10,7 @@ const OVERVIEW = {
       cy: 0,
       cz: 0,
       size: 80,
-      count: 2,
+      count: 3,
       tile: "tiles/sol.json",
     },
   ],
@@ -26,6 +26,7 @@ const TILE = {
       government: "Democracy",
       cat: ["home"],
       stellarColor: "#fff1a8",
+      stellarType: "G",
     },
     {
       name: "Hutton",
@@ -34,6 +35,12 @@ const TILE = {
       allegiance: "Independent",
       government: "Anarchy",
       cat: ["poi"],
+    },
+    {
+      name: "Nomad",
+      coords: { x: 2, y: 0, z: 0 },
+      cat: ["extra"],
+      stellarType: "RoguePlanet",
     },
   ],
 };
@@ -67,11 +74,35 @@ describe("color-by and Category filters", () => {
       catalog: { overviewUrl: "/catalog/overview.json" },
     });
     await map.focus({ x: 0, y: 0, z: 0 });
-    expect(map.visibleSystems().map((s) => s.name).sort()).toEqual(["Hutton", "Sol"]);
+    expect(map.visibleSystems().map((s) => s.name).sort()).toEqual([
+      "Hutton",
+      "Nomad",
+      "Sol",
+    ]);
     map.setFilter({ categories: ["home"] });
     expect(map.visibleSystems().map((s) => s.name)).toEqual(["Sol"]);
     map.setFilter({});
-    expect(map.visibleSystems()).toHaveLength(2);
+    expect(map.visibleSystems()).toHaveLength(3);
+  });
+
+  it("can exclude rogue planets from All and opt them in alone or with stars", async () => {
+    const map = await ED3DM.create({
+      container: document.body,
+      catalog: { overviewUrl: "/catalog/overview.json" },
+    });
+    await map.focus({ x: 0, y: 0, z: 0 });
+    map.setFilter({ excludedStellarTypes: ["RoguePlanet"] });
+    expect(map.visibleSystems().map((s) => s.name).sort()).toEqual([
+      "Hutton",
+      "Sol",
+    ]);
+    map.setFilter({ stellarTypes: ["RoguePlanet"] });
+    expect(map.visibleSystems().map((s) => s.name)).toEqual(["Nomad"]);
+    map.setFilter({ stellarTypes: ["G", "RoguePlanet"] });
+    expect(map.visibleSystems().map((s) => s.name).sort()).toEqual([
+      "Nomad",
+      "Sol",
+    ]);
   });
 
   it("setColorBy changes orbColor independently of the Category filter", async () => {

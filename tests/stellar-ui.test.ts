@@ -4,6 +4,7 @@ import {
   STELLAR_FILTER_GROUPS,
   detailedStellarClass,
   renderSystemDetails,
+  stellarFilterForKeys,
   stellarTypesForFilterKeys,
 } from "../demo/stellar-ui";
 import type { System } from "../src/types";
@@ -13,6 +14,7 @@ describe("stellar details and filters", () => {
     expect(STELLAR_FILTER_GROUPS.map(({ label }) => label)).toEqual([
       "Scoopable",
       "Not scoopable",
+      "Extras",
     ]);
     expect(stellarTypesForFilterKeys(["O", "white-dwarf"])).toEqual(
       expect.arrayContaining(["O", "D", "DA", "DB", "DC", "DQ", "DX"]),
@@ -26,8 +28,14 @@ describe("stellar details and filters", () => {
       ),
     );
     const supported = new Set<string>(STELLAR_TYPES);
+    expect(stellarTypesForFilterKeys(["rogue-planet"])).toEqual(["RoguePlanet"]);
+    expect(stellarFilterForKeys([])).toEqual({
+      excludedStellarTypes: ["RoguePlanet"],
+    });
+    expect(stellarFilterForKeys(["G", "rogue-planet"])).toEqual({
+      stellarTypes: ["G", "RoguePlanet"],
+    });
     expect(STELLAR_TYPES.filter((type) => !mapped.has(type))).toEqual([
-      "RoguePlanet",
       "Nebula",
       "StellarRemnantNebula",
     ]);
@@ -39,6 +47,11 @@ describe("stellar details and filters", () => {
       luminosityClass: "III",
       validation: "exact",
     })).toBe("M red giant · M3 III");
+    expect(detailedStellarClass({
+      bodyId: 0,
+      starType: "RoguePlanet",
+      validation: "exact",
+    })).toBe("Rogue planet");
   });
 
   it("renders present primary and secondary details without missing-value or provenance noise", () => {
@@ -58,6 +71,7 @@ describe("stellar details and filters", () => {
           luminosityClass: "V",
           stellarMassSolar: 1,
           surfaceTemperatureKelvin: 5778,
+          luminositySolar: 1.25,
           absoluteMagnitude: 4.83,
           validation: "exact",
         },
@@ -83,7 +97,7 @@ describe("stellar details and filters", () => {
     expect(html).toContain("5,778 K");
     expect(html).toContain("Absolute magnitude");
     expect(html).toContain("Luminosity");
-    expect(html).toContain("1 L☉");
+    expect(html).toContain("1.25 L☉");
     expect(html).not.toContain("Generation");
     expect(html).not.toContain("Profile");
     expect(html).not.toContain("not supplied");

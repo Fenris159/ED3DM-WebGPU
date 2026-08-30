@@ -13,7 +13,7 @@ export const PEGE_OVERVIEW_CONFIG = {
 } as const;
 
 const PEGE_OVERVIEW_CACHE_VERSION =
-  `pege-1.6-spatial-v${GALAXY_SPATIAL_SELECTION_VERSION}`;
+  `pege-1.7-spatial-v${GALAXY_SPATIAL_SELECTION_VERSION}`;
 
 export function pegeOverviewCacheId(
   runtimeUrl: string,
