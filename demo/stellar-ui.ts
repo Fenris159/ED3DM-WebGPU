@@ -205,7 +205,11 @@ function componentDetails(
   secondaryIndex: number,
 ): string {
   const primary = component.bodyId === primaryBodyId;
-  const role = primary ? "Primary star" : `Secondary star ${secondaryIndex}`;
+  const role = component.starType === "RoguePlanet"
+    ? "Rogue planet"
+    : primary
+      ? "Primary star"
+      : `Secondary star ${secondaryIndex}`;
   const heading = component.name ? `${role} · ${component.name}` : role;
   const orbital = component.orbitalElements;
   const rows = [

@@ -103,4 +103,24 @@ describe("stellar details and filters", () => {
     expect(html).not.toContain("not supplied");
     expect(html).not.toContain("Radius");
   });
+
+  it("presents a standalone rogue planet as an object rather than a primary star", () => {
+    const html = renderSystemDetails({
+      name: "Synuefoi JS-U a56-0",
+      id64: "4103303088608",
+      coords: { x: -11773.96875, y: -124.25, z: -464.96875 },
+      stellarType: "RoguePlanet",
+      stellarComponents: [{
+        bodyId: 0,
+        starType: "RoguePlanet",
+        stellarMassSolar: 0.01171875,
+        validation: "estimated",
+      }],
+      stellarPrimaryBodyId: 0,
+    });
+
+    expect(html).toContain("Rogue planet");
+    expect(html).not.toContain("Primary star");
+    expect(html).not.toContain("Secondary star");
+  });
 });
