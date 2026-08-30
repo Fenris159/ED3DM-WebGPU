@@ -208,5 +208,7 @@ export type CreateOptions = {
   onZoom?: (percent: number) => void;
   onMassCode?: (code: MassCode, finest: MassCode) => void;
   onVisibleSystemsChange?: (count: number, detailCount: number) => void;
+  /** Called after newly generated local detail has reached a rendered frame. */
+  onDetailRendered?: () => void;
   viewCompass?: HTMLCanvasElement;
 };

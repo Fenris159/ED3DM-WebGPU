@@ -243,10 +243,15 @@ export const ED3DM = {
       if (!anchor) return false;
       const residency = focusedResidencyRegion(anchor, cameraDistanceLy);
       const requestKey = `region:${residency.key}:${lod}`;
-      if (requestKey === committedLocalRequestKey) return true;
       if (requestKey === sourceLocalRequestKey) return false;
+      if (requestKey === committedLocalRequestKey) {
+        sourceLocalRequest?.abort();
+        return true;
+      }
       sourceLocalRequest?.abort();
       const controller = new AbortController();
+      const activityRevision = ++detailActivityRevision;
+      detailActivity += 1;
       sourceLocalRequest = controller;
       sourceLocalRequestKey = requestKey;
       try {
@@ -276,6 +281,8 @@ export const ED3DM = {
         }
         return false;
       } finally {
+        detailActivity -= 1;
+        void notifyDetailRenderedWhenIdle(activityRevision);
         if (sourceLocalRequest === controller) {
           sourceLocalRequest = undefined;
           sourceLocalRequestKey = undefined;
@@ -312,10 +319,15 @@ export const ED3DM = {
           return `${shell.tier}:${bounds}:${keys}@${shellTargets[index]}`;
         })
         .join("|")}`;
-      if (requestKey === committedSpatialRequestKey) return true;
       if (requestKey === sourceSpatialRequestKey) return false;
+      if (requestKey === committedSpatialRequestKey) {
+        sourceSpatialRequest?.abort();
+        return true;
+      }
       sourceSpatialRequest?.abort();
       const controller = new AbortController();
+      const activityRevision = ++detailActivityRevision;
+      detailActivity += 1;
       sourceSpatialRequest = controller;
       sourceSpatialRequestKey = requestKey;
       try {
@@ -337,15 +349,14 @@ export const ED3DM = {
             controller.signal,
           );
           if (controller.signal.aborted) return false;
-          progressiveTiles.push(
-            ...tiles.map((tile) => ({
-              ...tile,
-              key: `${tile.key}@${shell.tier}`,
-              systems: tile.systems.filter(({ coords }) =>
-                radialMassCodeShellContains(shell, coords),
-              ),
-            })),
-          );
+          const clippedTiles = tiles.map((tile) => ({
+            ...tile,
+            key: `${tile.key}@${shell.tier}`,
+            systems: tile.systems.filter(({ coords }) =>
+              radialMassCodeShellContains(shell, coords),
+            ),
+          }));
+          progressiveTiles.push(...clippedTiles);
           sourceSpatialTiles = mergeSpatialTiles(
             previousSpatialTiles,
             progressiveTiles,
@@ -354,6 +365,7 @@ export const ED3DM = {
         }
         sourceSpatialTiles = mergeSpatialTiles(progressiveTiles);
         committedSpatialRequestKey = requestKey;
+        paint();
         return true;
       } catch (error) {
         if (!(error instanceof DOMException && error.name === "AbortError")) {
@@ -361,6 +373,8 @@ export const ED3DM = {
         }
         return false;
       } finally {
+        detailActivity -= 1;
+        void notifyDetailRenderedWhenIdle(activityRevision);
         if (sourceSpatialRequest === controller) {
           sourceSpatialRequest = undefined;
           sourceSpatialRequestKey = undefined;
@@ -496,6 +510,26 @@ export const ED3DM = {
     let scene: SceneHandle | undefined;
     let lastVisibleCount = -1;
     let lastVisibleDetailCount = -1;
+    let detailActivity = 0;
+    let detailActivityRevision = 0;
+
+    async function waitForDetailFrame(): Promise<void> {
+      if (!scene || typeof requestAnimationFrame !== "function") return;
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    }
+
+    async function notifyDetailRenderedWhenIdle(revision: number): Promise<void> {
+      // Let an awaiting applyLod continuation start its next stage before
+      // declaring the whole exact-plus-spatial residency complete.
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      if (detailActivity !== 0 || revision !== detailActivityRevision) return;
+      paint();
+      await waitForDetailFrame();
+      if (detailActivity !== 0 || revision !== detailActivityRevision) return;
+      options.onDetailRendered?.();
+    }
+
     function paint() {
       const shown = visible();
       const detailKeys = new Set<string>();

@@ -40,8 +40,11 @@ export type RadialMassCodeShell = {
  * Camera-local residency is centered on the focus, not the frustum or the
  * containing Forge boxel's origin. The canonical PEGE storage tiles remain
  * h-sized. G/F/E define successively smaller geometric expansion bands around
- * the focused h-sized cube; PEGE tile results are clipped into complete 3D
- * shells after generation. Every shell receives a smaller stable prefix.
+ * the focused h-sized cube. Their source reads use the next coarser canonical
+ * storage level, then are clipped into complete 3D shells after generation.
+ * This preserves genuine positions while avoiding dozens of fine-tile worker
+ * passes for low-density blending tiers. Every shell receives a smaller stable
+ * prefix.
  */
 export function radialMassCodeShellPlan(
   target: { x: number; y: number; z: number },
@@ -73,7 +76,11 @@ export function radialMassCodeShellPlan(
       weight,
       outerBounds,
       ...(innerBounds ? { innerBounds } : {}),
-      keys: visiblePegeTileKeys(outerBounds, h.size, MAX_VISIBLE_PEGE_TILES),
+      keys: visiblePegeTileKeys(
+        outerBounds,
+        tier === "h" ? h.size : h.size * 2,
+        MAX_VISIBLE_PEGE_TILES,
+      ),
     };
     innerBounds = outerBounds;
     return shell;

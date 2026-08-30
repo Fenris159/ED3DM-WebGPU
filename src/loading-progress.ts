@@ -28,12 +28,19 @@ export function galaxyLoadPresentation(progress: GalaxyLoadProgress): {
   };
 }
 
-export function detailLoadPresentation(progress: GalaxyLoadProgress): {
+export function detailLoadPresentation(
+  progress: GalaxyLoadProgress,
+  rendered = false,
+): {
   percent: number;
   label: string;
 } {
+  if (rendered) return { percent: 100, label: "Loaded" };
+  const percent = Math.min(99, Math.round(progressRatio(progress) * 100));
   return {
-    percent: Math.round(progressRatio(progress) * 100),
-    label: "Loaded... Please Wait",
+    percent,
+    label: percent >= 99
+      ? "Rendering stars... Please Wait"
+      : "Loaded... Please Wait",
   };
 }

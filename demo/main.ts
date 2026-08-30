@@ -28,6 +28,7 @@ const loadingProgressFill = document.querySelector("#loading-progress-fill") as 
 const loadingPercent = document.querySelector("#loading-percent") as HTMLElement;
 const detailLoadingStatus = document.querySelector("#detail-loading-status") as HTMLElement;
 const detailLoadingPercent = document.querySelector("#detail-loading-percent") as HTMLElement;
+const detailLoadingCopy = document.querySelector("#detail-loading-copy") as HTMLElement;
 const filter = document.querySelector("#filter") as HTMLSelectElement;
 const grid = document.querySelector("#grid") as HTMLInputElement;
 const regions = document.querySelector("#regions") as HTMLInputElement;
@@ -83,16 +84,29 @@ function updateLoading(progress: GalaxyLoadProgress) {
 
 function updateDetailLoading(progress: GalaxyLoadProgress) {
   const presentation = detailLoadPresentation(progress);
+  showDetailLoading(presentation.percent, presentation.label);
+}
+
+function showDetailLoading(percent: number, label: string) {
   window.clearTimeout(detailLoadingHideTimer);
-  detailLoadingPercent.textContent = `${presentation.percent}%`;
+  detailLoadingPercent.textContent = `${percent}%`;
+  detailLoadingCopy.textContent = label;
   detailLoadingStatus.hidden = false;
-  detailLoadingStatus.setAttribute("aria-label", `${presentation.percent}% ${presentation.label}`);
+  detailLoadingStatus.setAttribute("aria-label", `${percent}% ${label}`);
   detailLoadingHideTimer = window.setTimeout(
     () => {
       detailLoadingStatus.hidden = true;
     },
-    presentation.percent >= 100 ? 450 : 30_000,
+    percent >= 100 ? 450 : 30_000,
   );
+}
+
+function showDetailRendered() {
+  const presentation = detailLoadPresentation(
+    { phase: "detail", completed: 1, total: 1 },
+    true,
+  );
+  showDetailLoading(presentation.percent, presentation.label);
 }
 
 function updateEngineProgress(progress: GalaxyLoadProgress) {
@@ -244,6 +258,7 @@ async function main() {
         : "";
       engineStatus.textContent = `${count.toLocaleString()} Systems${detail} · aggregate density`;
     },
+    onDetailRendered: showDetailRendered,
     viewCompass: document.querySelector("#view-compass-canvas") as HTMLCanvasElement,
   });
   setLoading(99, "Rendering the first galaxy frame");

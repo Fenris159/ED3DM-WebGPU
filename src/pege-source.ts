@@ -382,13 +382,15 @@ export class PegeGalaxySource implements GalaxySource {
     const response = event.data;
     const pending = this.#pending.get(response.requestId);
     if (response.type === "progress") {
-      if (response.requestId === 0) return;
+      // Cancelled and superseded requests can still have queued worker
+      // progress. Never let those orphan messages complete the active UI.
+      if (response.requestId === 0 || !pending) return;
       this.#onProgress?.(
         response.phase === "detail"
           ? mapDetailProgress(
               response.completed,
               response.total,
-              pending?.kind === "generate" || pending?.kind === "tiles"
+              pending.kind === "generate" || pending.kind === "tiles"
                 ? pending.detailProgressRange
                 : undefined,
             )

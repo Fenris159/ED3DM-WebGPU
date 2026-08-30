@@ -35,6 +35,7 @@ import type {
   GalaxyRegionRequest,
   GalaxyOverviewRequest,
   GalaxySource,
+  GalaxySpatialTile,
   GalaxySpatialTileRequest,
   System,
   SystemSuggestion,
@@ -484,6 +485,65 @@ describe("PEGE galaxy adapter", () => {
     source.destroy();
   });
 
+  it("ignores late progress from a cancelled spatial request", async () => {
+    const worker = new FakePegeWorker();
+    const onProgress = vi.fn();
+    const source = new PegeGalaxySource({
+      runtimeUrl: "/pege-runtime.bin?v=1.5.0",
+      worker: worker as unknown as Worker,
+      onProgress,
+    });
+    const key = { level: 0, x: 0, y: 0, z: 0 } as const;
+    const controller = new AbortController();
+    const loading = source.loadSpatialTiles!(
+      {
+        keys: [key],
+        totalTargetSystems: 2,
+        detailProgressRange: { start: 0.35, end: 0.55 },
+      },
+      controller.signal,
+    );
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    const planRequest = worker.messages[1] as { requestId: number };
+    worker.emit({
+      type: "tile-plan",
+      requestId: planRequest.requestId,
+      tiles: [{
+        key,
+        keyString: "0/0/0/0",
+        targetSystems: 2,
+        populationWeight: 1,
+      }],
+    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    const tileRequest = worker.messages[2] as { requestId: number };
+    worker.emit({
+      type: "progress",
+      requestId: tileRequest.requestId,
+      phase: "detail",
+      completed: 0,
+      total: 2,
+    });
+    expect(onProgress).toHaveBeenLastCalledWith({
+      phase: "detail",
+      completed: 0.35,
+      total: 1,
+    });
+
+    controller.abort();
+    await expect(loading).rejects.toMatchObject({ name: "AbortError" });
+    const progressCalls = onProgress.mock.calls.length;
+    worker.emit({
+      type: "progress",
+      requestId: tileRequest.requestId,
+      phase: "detail",
+      completed: 2,
+      total: 2,
+    });
+    expect(onProgress).toHaveBeenCalledTimes(progressCalls);
+    source.destroy();
+  });
+
   it("clips whole-boxel PEGE records to the requested spatial bounds before transfer", () => {
     const batch = thinPackedBatch(
       packedRecord(),
@@ -861,10 +921,52 @@ describe("PEGE galaxy adapter", () => {
       coords: { x: 1_780, y: 0, z: 0 },
       generation: "ordinary",
     };
-    const spatialNeighbors = [hNeighbor, gNeighbor, fNeighbor, eNeighbor];
+    const replacementNeighbors: System[] = [
+      {
+        ...hNeighbor,
+        name: "Replacement H neighbor",
+        id64: "14",
+        coords: { x: 500, y: 200, z: 0 },
+      },
+      {
+        ...gNeighbor,
+        name: "Replacement G neighbor",
+        id64: "15",
+        coords: { x: 110, y: 800, z: 0 },
+      },
+      {
+        ...fNeighbor,
+        name: "Replacement F neighbor",
+        id64: "16",
+        coords: { x: 110, y: 0, z: 1_400 },
+      },
+      {
+        ...eNeighbor,
+        name: "Replacement E neighbor",
+        id64: "17",
+        coords: { x: 1_790, y: 0, z: 0 },
+      },
+    ];
+    const spatialBatches = [
+      [hNeighbor, gNeighbor, fNeighbor, eNeighbor],
+      replacementNeighbors,
+    ];
     let spatialCall = 0;
-    const loadSpatialTiles = vi.fn(async (request: GalaxySpatialTileRequest) => {
-      const system = spatialNeighbors[spatialCall++ % spatialNeighbors.length]!;
+    let blockedSignal: AbortSignal | undefined;
+    let releaseBlocked: ((tiles: GalaxySpatialTile[]) => void) | undefined;
+    const loadSpatialTiles = vi.fn(async (
+      request: GalaxySpatialTileRequest,
+      signal?: AbortSignal,
+    ) => {
+      if (spatialCall >= 8) {
+        spatialCall += 1;
+        blockedSignal = signal;
+        return await new Promise<GalaxySpatialTile[]>((resolve) => {
+          releaseBlocked = resolve;
+        });
+      }
+      const batch = Math.floor(spatialCall / 4);
+      const system = spatialBatches[batch]![spatialCall++ % 4]!;
       return [{
         key: `${request.keys[0]!.level}/${request.keys[0]!.x}/${request.keys[0]!.y}/${request.keys[0]!.z}`,
         tileKey: request.keys[0]!,
@@ -873,9 +975,25 @@ describe("PEGE galaxy adapter", () => {
         systems: [system],
       }];
     });
+    let blockNextRegion = false;
+    let blockedRegionSignal: AbortSignal | undefined;
+    let releaseBlockedRegion: (() => void) | undefined;
+    const loadRegion = vi.fn(async (
+      _request: GalaxyRegionRequest,
+      signal?: AbortSignal,
+    ) => {
+      if (blockNextRegion) {
+        blockNextRegion = false;
+        blockedRegionSignal = signal;
+        await new Promise<void>((resolve) => {
+          releaseBlockedRegion = resolve;
+        });
+      }
+      return [target, exactNeighbor];
+    });
     const source: GalaxySource = {
       loadOverview: vi.fn(async () => ({ systems: [overview] })),
-      loadRegion: vi.fn(async () => [target, exactNeighbor]),
+      loadRegion,
       loadSpatialTiles,
       resolve: vi.fn(async () => target),
       suggest: vi.fn(async () => []),
@@ -883,9 +1001,16 @@ describe("PEGE galaxy adapter", () => {
       destroy: vi.fn(),
     };
 
-    const map = await ED3DM.create({ container: document.body, source, lod: "all" });
+    const onDetailRendered = vi.fn();
+    const map = await ED3DM.create({
+      container: document.body,
+      source,
+      lod: "all",
+      onDetailRendered,
+    });
     await map.flyTo(target.name);
     await vi.waitFor(() => expect(loadSpatialTiles).toHaveBeenCalledTimes(4));
+    await vi.waitFor(() => expect(onDetailRendered).toHaveBeenCalledTimes(1));
     await vi.waitFor(() =>
       expect(map.visibleSystems().map(({ name }) => name)).toEqual(
         expect.arrayContaining([
@@ -928,6 +1053,31 @@ describe("PEGE galaxy adapter", () => {
     map.clearSelection();
     await map.focus({ x: 110, y: 0, z: 0 });
     expect(loadSpatialTiles).toHaveBeenCalledTimes(8);
+    await vi.waitFor(() => expect(onDetailRendered).toHaveBeenCalledTimes(2));
+    expect(map.visibleSystems().map(({ name }) => name)).toEqual(
+      expect.arrayContaining(replacementNeighbors.map(({ name }) => name)),
+    );
+    expect(map.visibleSystems().map(({ name }) => name)).not.toContain("H neighbor");
+
+    const leavingCommittedArea = map.focus({ x: 120, y: 0, z: 0 });
+    await vi.waitFor(() => expect(loadSpatialTiles).toHaveBeenCalledTimes(9));
+    await map.focus({ x: 110, y: 0, z: 0 });
+    expect(blockedSignal?.aborted).toBe(true);
+    releaseBlocked?.([]);
+    await leavingCommittedArea;
+    await vi.waitFor(() => expect(onDetailRendered).toHaveBeenCalledTimes(3));
+
+    blockNextRegion = true;
+    const priorRegionCalls = loadRegion.mock.calls.length;
+    const leavingDuringExactDetail = map.focus({ x: 5_000, y: 0, z: 0 });
+    await vi.waitFor(() =>
+      expect(loadRegion).toHaveBeenCalledTimes(priorRegionCalls + 1),
+    );
+    await map.focus({ x: 110, y: 0, z: 0 });
+    expect(blockedRegionSignal?.aborted).toBe(true);
+    releaseBlockedRegion?.();
+    await leavingDuringExactDetail;
+    await vi.waitFor(() => expect(onDetailRendered).toHaveBeenCalledTimes(4));
     map.destroy();
   });
 

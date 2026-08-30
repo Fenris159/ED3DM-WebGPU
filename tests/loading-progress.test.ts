@@ -22,6 +22,12 @@ describe("galaxy loading progress", () => {
     ).toEqual({ percent: 15, label: "Loaded... Please Wait" });
     expect(
       detailLoadPresentation({ phase: "detail", completed: 900, total: 800 }).percent,
-    ).toBe(100);
+    ).toBe(99);
+    expect(
+      detailLoadPresentation({ phase: "detail", completed: 1, total: 1 }),
+    ).toEqual({ percent: 99, label: "Rendering stars... Please Wait" });
+    expect(
+      detailLoadPresentation({ phase: "detail", completed: 1, total: 1 }, true),
+    ).toEqual({ percent: 100, label: "Loaded" });
   });
 });

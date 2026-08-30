@@ -210,6 +210,10 @@ describe("PEGE spatial tile view", () => {
     expect(shells.every(({ keys }) =>
       keys.length > 0 && keys.length <= MAX_VISIBLE_PEGE_TILES,
     )).toBe(true);
+    expect(shells[0]!.keys.every(({ level }) => level === 0)).toBe(true);
+    expect(shells.slice(1).every(({ keys }) =>
+      keys.every(({ level }) => level >= 1),
+    )).toBe(true);
 
     const [h, g, f, e] = shells;
     const hBounds = h!.outerBounds;
