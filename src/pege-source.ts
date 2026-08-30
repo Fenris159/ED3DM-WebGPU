@@ -9,6 +9,7 @@ import {
 } from "pege";
 import type {
   GalaxyLoadProgress,
+  GalaxyDetailProgressRange,
   GalaxyOverview,
   GalaxyOverviewRequest,
   GalaxyRegionRequest,
@@ -81,6 +82,7 @@ type GeneratePending = {
   resolve: (overview: GalaxyOverview) => void;
   reject: (error: Error) => void;
   detachAbort?: () => void;
+  detailProgressRange?: GalaxyDetailProgressRange;
 };
 
 type ValuePending = {
@@ -99,6 +101,7 @@ type TilesPending = {
   resolve: (tiles: GalaxySpatialTile[]) => void;
   reject: (error: Error) => void;
   detachAbort?: () => void;
+  detailProgressRange?: GalaxyDetailProgressRange;
 };
 
 type Pending = GeneratePending | ValuePending | TilesPending;
@@ -115,6 +118,23 @@ function asError(message: string): Error {
 
 function abortError(): Error {
   return new DOMException("PEGE region request aborted", "AbortError");
+}
+
+export function mapDetailProgress(
+  completed: number,
+  total: number | undefined,
+  range: GalaxyDetailProgressRange | undefined,
+): GalaxyLoadProgress {
+  if (!range) return { phase: "detail", completed, total };
+  const safeTotal = total && total > 0 ? total : 1;
+  const ratio = Math.min(1, Math.max(0, completed / safeTotal));
+  const start = Math.min(1, Math.max(0, range.start));
+  const end = Math.min(1, Math.max(start, range.end));
+  return {
+    phase: "detail",
+    completed: start + (end - start) * ratio,
+    total: 1,
+  };
 }
 
 function fieldValidation(
@@ -350,16 +370,26 @@ export class PegeGalaxySource implements GalaxySource {
 
   #onMessage = (event: MessageEvent<PegeWorkerResponse>) => {
     const response = event.data;
+    const pending = this.#pending.get(response.requestId);
     if (response.type === "progress") {
       if (response.requestId === 0) return;
-      this.#onProgress?.({
-        phase: response.phase,
-        completed: response.completed,
-        total: response.total,
-      });
+      this.#onProgress?.(
+        response.phase === "detail"
+          ? mapDetailProgress(
+              response.completed,
+              response.total,
+              pending?.kind === "generate" || pending?.kind === "tiles"
+                ? pending.detailProgressRange
+                : undefined,
+            )
+          : {
+              phase: response.phase,
+              completed: response.completed,
+              total: response.total,
+            },
+      );
       return;
     }
-    const pending = this.#pending.get(response.requestId);
     if (!pending) return;
     if (response.type === "batch") {
       if (pending.kind === "generate") {
@@ -473,6 +503,7 @@ export class PegeGalaxySource implements GalaxySource {
   #generateTiles(
     plan: TilePlan,
     signal?: AbortSignal,
+    detailProgressRange?: GalaxyDetailProgressRange,
   ): Promise<GalaxySpatialTile[]> {
     if (signal?.aborted) return Promise.reject(abortError());
     if (plan.length === 0) return Promise.resolve([]);
@@ -494,6 +525,7 @@ export class PegeGalaxySource implements GalaxySource {
         resolve,
         reject,
         detachAbort: () => signal?.removeEventListener("abort", abort),
+        detailProgressRange,
       });
       this.#worker.postMessage({
         type: "tiles",
@@ -562,6 +594,7 @@ export class PegeGalaxySource implements GalaxySource {
       yieldEveryBoxels?: number;
     },
     signal?: AbortSignal,
+    detailProgressRange?: GalaxyDetailProgressRange,
   ): Promise<GalaxyOverview> {
     if (signal?.aborted) return Promise.reject(abortError());
     const requestId = this.#nextRequestId++;
@@ -581,6 +614,7 @@ export class PegeGalaxySource implements GalaxySource {
         resolve,
         reject,
         detachAbort: () => signal?.removeEventListener("abort", abort),
+        detailProgressRange,
       });
       this.#worker.postMessage({
         requestId,
@@ -654,6 +688,7 @@ export class PegeGalaxySource implements GalaxySource {
         maximumBoxels: maximumBoxelsForView(request.cameraDistanceLy),
       },
       signal,
+      request.detailProgressRange,
     );
     const radiusSquared = radius * radius;
     if (request.bounds) return generated.then(({ systems }) => systems);
@@ -726,7 +761,14 @@ export class PegeGalaxySource implements GalaxySource {
         });
       }
     }
-    for (const tile of await this.#generateTiles(missing, signal)) {
+    this.#onProgress?.(
+      mapDetailProgress(0, 1, request.detailProgressRange),
+    );
+    for (const tile of await this.#generateTiles(
+      missing,
+      signal,
+      request.detailProgressRange,
+    )) {
       const planned = plan.find((entry) => entry.keyString === tile.key)!;
       const cacheKey = this.#spatialTileCacheKey(planned);
       const cached = { ...tile, lastUsed: ++this.#tileUseRevision };
@@ -734,6 +776,9 @@ export class PegeGalaxySource implements GalaxySource {
       resultByKey.set(tile.key, cached);
     }
     this.#trimSpatialTileCache(usedCacheKeys);
+    this.#onProgress?.(
+      mapDetailProgress(1, 1, request.detailProgressRange),
+    );
     return plan
       .map((tile) => resultByKey.get(tile.keyString))
       .filter((tile): tile is GalaxySpatialTile => tile !== undefined)

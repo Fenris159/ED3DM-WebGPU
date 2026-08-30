@@ -1,5 +1,5 @@
 import * as THREE from "three/webgpu";
-import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { TrackballControls } from "three/examples/jsm/controls/TrackballControls.js";
 import {
   boxelGridWorld,
   boxelSize,
@@ -121,6 +121,62 @@ export function planarPanDelta(
     x: -dxPx * worldPerPixel * right.x + dyPx * worldPerPixel * forward.x,
     z: -dxPx * worldPerPixel * right.z + dyPx * worldPerPixel * forward.z,
   };
+}
+
+export function cameraPlanarPanAxes(camera: THREE.Camera): {
+  right: { x: number; z: number };
+  up: { x: number; z: number };
+} {
+  camera.updateMatrixWorld();
+  const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
+  const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1);
+  right.y = 0;
+  up.y = 0;
+  if (right.lengthSq() < 1e-8) right.set(1, 0, 0);
+  else right.normalize();
+  if (up.lengthSq() < 1e-8) up.set(0, 0, 1);
+  else up.normalize();
+  return {
+    right: { x: right.x, z: right.z },
+    up: { x: up.x, z: up.z },
+  };
+}
+
+export function createMapControls(
+  camera: THREE.Camera,
+  canvas: HTMLElement,
+): TrackballControls {
+  const controls = new TrackballControls(camera, canvas);
+  controls.rotateSpeed = 0.65;
+  controls.zoomSpeed = 2.2;
+  controls.panSpeed = 4;
+  controls.staticMoving = true;
+  controls.noPan = true;
+  controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
+  controls.mouseButtons.MIDDLE = THREE.MOUSE.DOLLY;
+  controls.mouseButtons.RIGHT = null;
+  return controls;
+}
+
+export const MAX_CAMERA_DISTANCE_LY = 120_000;
+
+export function minimumCameraDistanceLy(fovDegrees = 50): number {
+  return 10 / Math.tan((fovDegrees * Math.PI) / 360);
+}
+
+export function cameraZoomPercent(
+  distanceLy: number,
+  minimumDistanceLy = minimumCameraDistanceLy(),
+  maximumDistanceLy = MAX_CAMERA_DISTANCE_LY,
+): number {
+  const minimum = Math.max(Number.EPSILON, minimumDistanceLy);
+  const maximum = Math.max(minimum + Number.EPSILON, maximumDistanceLy);
+  const distance = Math.min(maximum, Math.max(minimum, distanceLy));
+  return Math.round(
+    ((Math.log(maximum) - Math.log(distance)) /
+      (Math.log(maximum) - Math.log(minimum))) *
+      100,
+  );
 }
 
 export function topViewCameraPosition(
@@ -327,26 +383,18 @@ export async function attachScene(
   renderer.setClearColor(initialBackground, 1);
   renderer.setSize(initialWidth, initialHeight, false);
 
-  const controls = new OrbitControls(camera, canvas);
+  const controls = createMapControls(camera, canvas);
   let planeY = 0;
-  controls.enableDamping = true;
-  controls.dampingFactor = 0.3;
-  controls.rotateSpeed = 0.3;
-  controls.zoomSpeed = 2.2;
-  controls.panSpeed = 4;
-  controls.maxDistance = 120000;
-  controls.minDistance =
-    (10 * 2) / (2 * Math.tan((camera.fov * Math.PI) / 360));
-  controls.enablePan = false;
-  controls.screenSpacePanning = false;
-  controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
-  controls.mouseButtons.MIDDLE = THREE.MOUSE.DOLLY;
-  controls.mouseButtons.RIGHT = THREE.MOUSE.PAN;
+  controls.maxDistance = MAX_CAMERA_DISTANCE_LY;
+  controls.minDistance = minimumCameraDistanceLy(camera.fov);
   controls.target.set(GALAXY_CORE.x, 0, GALAXY_CORE.z);
+  controls.update();
+
+  const controlsDistance = () => camera.position.distanceTo(controls.target);
 
   function currentViewState(): GalaxyCameraView {
     camera.updateMatrixWorld();
-    const distanceLy = controls.getDistance();
+    const distanceLy = controlsDistance();
     const direction = camera.getWorldDirection(new THREE.Vector3()).normalize();
     const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0).normalize();
     const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1).normalize();
@@ -434,7 +482,7 @@ export async function attachScene(
   let showGrid = true;
   let showRegionGrid = true;
   let theme: VisualTheme = initialTheme;
-  let massCode: MassCode = "a";
+  let massCode: MassCode = "h";
   let boxelWin: BoxelWindow | undefined;
   let grid = makeBoxelGrid(theme);
   scene.add(grid);
@@ -453,13 +501,16 @@ export async function attachScene(
   const cruiseTarget = new THREE.Vector3();
   const cruiseFromPos = new THREE.Vector3();
   const cruiseFromTarget = new THREE.Vector3();
-  const _panRight = new THREE.Vector3();
-  const _panFwd = new THREE.Vector3();
+  const panRaycaster = new THREE.Raycaster();
+  const panPlane = new THREE.Plane();
+  const panPlanePoint = new THREE.Vector3();
+  const panCurrentPoint = new THREE.Vector3();
   let cruising = false;
   let cruiseStartedAt = 0;
   let planePanning = false;
   let panLastX = 0;
   let panLastY = 0;
+  let panGrabPoint: THREE.Vector3 | undefined;
   let selectedAnchor: THREE.Vector3 | undefined;
   let selectedSystemKey: string | undefined;
   let selectionRails: number[] = [];
@@ -480,27 +531,36 @@ export async function attachScene(
   }
 
   function panFromPixels(dxPx: number, dyPx: number) {
-    camera.updateMatrixWorld();
-    _panRight.setFromMatrixColumn(camera.matrixWorld, 0);
-    _panRight.y = 0;
-    if (_panRight.lengthSq() < 1e-8) _panRight.set(1, 0, 0);
-    else _panRight.normalize();
-    _panFwd.crossVectors(camera.up, _panRight);
-    if (_panFwd.lengthSq() < 1e-8) _panFwd.set(0, 0, 1);
-    else _panFwd.normalize();
-    const dist = Math.max(8, controls.getDistance());
+    const axes = cameraPlanarPanAxes(camera);
+    const dist = Math.max(8, controlsDistance());
     const s =
       (2 * dist * Math.tan((camera.fov * Math.PI) / 360)) /
       Math.max(canvas.clientHeight, 1);
-    const delta = planarPanDelta(dxPx, dyPx, s, _panRight, _panFwd);
+    const delta = planarPanDelta(dxPx, dyPx, s, axes.right, axes.up);
     panOnHeightPlane(delta.x, delta.z);
+  }
+
+  function pointOnHeightPlane(clientX: number, clientY: number): THREE.Vector3 | undefined {
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return undefined;
+    panRaycaster.setFromCamera(
+      new THREE.Vector2(
+        ((clientX - rect.left) / rect.width) * 2 - 1,
+        -((clientY - rect.top) / rect.height) * 2 + 1,
+      ),
+      camera,
+    );
+    panPlane.set(new THREE.Vector3(0, 1, 0), -planeY);
+    return panRaycaster.ray.intersectPlane(panPlane, panPlanePoint)
+      ? panPlanePoint.clone()
+      : undefined;
   }
 
   function planeViewAabb(): { minX: number; maxX: number; minZ: number; maxZ: number } {
     const S = boxelSize(massCode);
     const dist = Math.max(
       Math.abs(camera.position.y - planeY),
-      controls.getDistance(),
+      controlsDistance(),
       1,
     );
     const half = Math.max(
@@ -521,7 +581,7 @@ export async function attachScene(
 
   function syncMassCodeForZoom() {
     const finest = finestMassCode(
-      controls.getDistance(),
+      controlsDistance(),
       camera.fov,
       container.clientHeight || 600,
     );
@@ -538,14 +598,13 @@ export async function attachScene(
   }
 
   function fitCameraNear() {
-    const dist = Math.max(controls.getDistance(), 0.5);
+    const dist = Math.max(controlsDistance(), 0.5);
     const near = Math.max(0.02, Math.min(2, dist * 0.05));
     if (Math.abs(camera.near - near) > 0.01) {
       camera.near = near;
       camera.updateProjectionMatrix();
     }
-    const minD =
-      (boxelSize("a") * 2) / (2 * Math.tan((camera.fov * Math.PI) / 360));
+    const minD = minimumCameraDistanceLy(camera.fov);
     if (Math.abs(controls.minDistance - minD) > 0.5) controls.minDistance = minD;
   }
 
@@ -868,7 +927,7 @@ export async function attachScene(
       }
     }
     const pt = new THREE.Vector3();
-    raycaster.ray.at(Math.min(controls.getDistance() * 0.35, 5000), pt);
+    raycaster.ray.at(Math.min(controlsDistance() * 0.35, 5000), pt);
     handlers.onPickCell({ x: pt.x, y: pt.y, z: pt.z });
   }
 
@@ -911,12 +970,21 @@ export async function attachScene(
     planePanning = true;
     panLastX = ev.clientX;
     panLastY = ev.clientY;
+    panGrabPoint = pointOnHeightPlane(ev.clientX, ev.clientY);
     canvas.setPointerCapture(ev.pointerId);
   }
 
   function onPlanePanMove(ev: PointerEvent) {
     if (!planePanning) return;
-    panFromPixels(ev.clientX - panLastX, ev.clientY - panLastY);
+    const currentPoint = panGrabPoint
+      ? pointOnHeightPlane(ev.clientX, ev.clientY)
+      : undefined;
+    if (panGrabPoint && currentPoint) {
+      panCurrentPoint.copy(panGrabPoint).sub(currentPoint);
+      panOnHeightPlane(panCurrentPoint.x, panCurrentPoint.z);
+    } else {
+      panFromPixels(ev.clientX - panLastX, ev.clientY - panLastY);
+    }
     panLastX = ev.clientX;
     panLastY = ev.clientY;
   }
@@ -925,6 +993,7 @@ export async function attachScene(
     if (!planePanning) return;
     if (ev.type === "pointerup" && ev.button !== 2) return;
     planePanning = false;
+    panGrabPoint = undefined;
     try {
       canvas.releasePointerCapture(ev.pointerId);
     } catch {
@@ -955,6 +1024,7 @@ export async function attachScene(
         scenePixelRatio(width, height, window.devicePixelRatio),
       );
       renderer.setSize(width, height, false);
+      controls.handleResize();
     },
   );
   function onResize() {
@@ -987,13 +1057,13 @@ export async function attachScene(
       controls.update();
       lockLookAtToPlane();
     }
-    // OrbitControls applies its look-at before our persistent selection lock.
+    // The controls apply their look-at before our persistent selection lock.
     // Re-aim after the lock so the selected System stays at the true view center.
     camera.lookAt(controls.target);
     camera.updateMatrixWorld();
     refreshBoxelGrid();
     if (ring.visible) ring.lookAt(camera.position);
-    const d = controls.getDistance();
+    const d = controlsDistance();
     const nextShowRegionLabels = regionLabelsVisible(d);
     if (nextShowRegionLabels !== showRegionLabels) {
       showRegionLabels = nextShowRegionLabels;
@@ -1033,7 +1103,7 @@ export async function attachScene(
     },
     setMassCode(code) {
       const finest = finestMassCode(
-        controls.getDistance(),
+        controlsDistance(),
         camera.fov,
         container.clientHeight || 600,
       );
@@ -1049,25 +1119,14 @@ export async function attachScene(
     },
     resetTopView() {
       cruising = false;
-      const d = Math.max(80, controls.getDistance());
+      const d = Math.max(80, controlsDistance());
       const tx = controls.target.x;
       const tz = controls.target.z;
-      const oc = controls as OrbitControls & {
-        _sphericalDelta: THREE.Spherical;
-        _panOffset: THREE.Vector3;
-        _scale: number;
-      };
-      oc._sphericalDelta.set(0, 0, 0);
-      oc._panOffset.set(0, 0, 0);
-      oc._scale = 1;
       controls.target.set(tx, planeY, tz);
       camera.up.set(0, 1, 0);
       const position = topViewCameraPosition(tx, planeY, tz, d);
       camera.position.set(position.x, position.y, position.z);
-      const damping = controls.enableDamping;
-      controls.enableDamping = false;
       controls.update();
-      controls.enableDamping = damping;
       lockLookAtToPlane();
       refreshBoxelGrid();
       handlers.onViewIdle?.(currentViewState());

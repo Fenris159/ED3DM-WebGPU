@@ -301,6 +301,37 @@
         color: var(--ink);
         pointer-events: none;
       }
+      #detail-loading-status {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        color: var(--mute);
+        font: 500 11px/1.2 "Oxanium", sans-serif;
+        letter-spacing: 0.035em;
+        white-space: nowrap;
+        pointer-events: none;
+      }
+      #detail-loading-status[hidden] {
+        display: none;
+      }
+      .detail-loading-spinner {
+        width: 14px;
+        height: 14px;
+        flex: 0 0 14px;
+        border: 2px solid var(--line);
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        animation: loading-spin 700ms linear infinite;
+      }
+      #detail-loading-percent {
+        color: var(--ink);
+        font-variant-numeric: tabular-nums;
+      }
+      @media (max-width: 700px) {
+        #detail-loading-copy {
+          display: none;
+        }
+      }
       #hint {
         position: fixed;
         z-index: 4;
@@ -429,7 +460,8 @@
       #height-rail[data-compact="true"] {
         gap: 0;
       }
-      #height-rail[data-compact="true"] > span,
+      #height-rail[data-compact="true"] > .height-heading,
+      #height-rail[data-compact="true"] > #height-readout,
       #height-rail[data-compact="true"] > .height-nudge {
         display: none;
       }
@@ -439,6 +471,37 @@
         text-transform: uppercase;
         color: var(--mute);
         text-align: center;
+      }
+      .height-heading {
+        position: relative;
+        width: 52px;
+        min-height: 28px;
+        flex: none;
+      }
+      .height-heading > span {
+        display: block;
+        padding-top: 1px;
+      }
+      #zoom-status {
+        position: absolute;
+        left: 64px;
+        top: 0;
+        min-width: 48px;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 2px;
+        white-space: nowrap;
+      }
+      #zoom-status span {
+        font-size: 10px;
+      }
+      #zoom-percent {
+        color: var(--ink);
+        font-family: "Source Serif 4", "Times New Roman", serif;
+        font-size: 13px;
+        font-weight: 800;
+        letter-spacing: 0.04em;
       }
       .height-track {
         position: relative;
@@ -542,11 +605,6 @@
       <label>Filter
         <select id="filter">
           <option value="" selected>all</option>
-          <optgroup label="Generation">
-            <option value="generation:authored">authored</option>
-            <option value="generation:ordinary">ordinary procedural</option>
-            <option value="generation:constrained">constrained procedural</option>
-          </optgroup>
           <optgroup label="Primary star">
             <option value="stellar:O">O class</option>
             <option value="stellar:B">B class</option>
@@ -561,22 +619,28 @@
       <span id="engine-status" role="status">PEGE loading</span>
       <label>Boxel
         <select id="masscode" title="Keep this boxel filter while zooming">
-          <option value="a" selected>a · 10 ly</option>
+          <option value="a">a · 10 ly</option>
           <option value="b">b · 20 ly</option>
           <option value="c">c · 40 ly</option>
           <option value="d">d · 80 ly</option>
           <option value="e">e · 160 ly</option>
           <option value="f">f · 320 ly</option>
           <option value="g">g · 640 ly</option>
-          <option value="h">h · 1280 ly</option>
+          <option value="h" selected>h · 1280 ly</option>
         </select>
       </label>
-      <label><input id="grid" type="checkbox" checked /> grid</label>
-      <label><input id="regions" type="checkbox" checked /> regions</label>
+      <label><input id="grid" type="checkbox" /> grid</label>
+      <label><input id="regions" type="checkbox" /> regions</label>
     </div>
     <aside id="panel"></aside>
     <div id="height-rail">
-      <span>height</span>
+      <div class="height-heading">
+        <span>height</span>
+        <div id="zoom-status" aria-live="off">
+          <span>zoom</span>
+          <strong id="zoom-percent">0%</strong>
+        </div>
+      </div>
       <button type="button" class="height-nudge" id="height-up" aria-label="Raise height 10 light years" title="+10 ly">▲</button>
       <div class="height-track">
         <div class="height-gutter"></div>
@@ -591,8 +655,13 @@
         <canvas id="view-compass-canvas" width="144" height="144"></canvas>
       </button>
       <div id="wordmark">ED3DM</div>
+      <div id="detail-loading-status" role="status" aria-live="polite" hidden>
+        <span class="detail-loading-spinner" aria-hidden="true"></span>
+        <span id="detail-loading-percent">0%</span>
+        <span id="detail-loading-copy">Loaded... Please Wait</span>
+      </div>
     </div>
-    <div id="hint">Click any factual star · Density glow is not selectable · Drag rotates · Right-drag pans X/Z · Scroll zooms</div>
+    <div id="hint">Left-drag rotates freely · Right-drag grabs and pans X/Z · Scroll zooms</div>
     <div id="theme-picker" role="group" aria-label="Map colors">
       <button type="button" data-theme="paper" aria-pressed="false" title="Paper"></button>
       <button type="button" data-theme="charcoal" aria-pressed="false" title="Charcoal"></button>

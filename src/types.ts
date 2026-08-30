@@ -64,6 +64,11 @@ export type Route = {
 
 export type LodSetting = number | "all";
 
+export type GalaxyDetailProgressRange = {
+  start: number;
+  end: number;
+};
+
 export type GalaxyRegionRequest = {
   center: Coords;
   radiusLy: number;
@@ -71,6 +76,8 @@ export type GalaxyRegionRequest = {
   bounds?: GalaxyViewBounds;
   cameraDistanceLy: number;
   lod: LodSetting;
+  /** Optional share of the current local-detail loading operation, from 0 to 1. */
+  detailProgressRange?: GalaxyDetailProgressRange;
 };
 
 export type GalaxyOverviewRequest = {
@@ -110,6 +117,8 @@ export type GalaxySpatialTileRequest = {
     key: PegeSpatialTileKey;
     weight: number;
   }[];
+  /** Optional share of the current local-detail loading operation, from 0 to 1. */
+  detailProgressRange?: GalaxyDetailProgressRange;
 };
 
 export type GalaxySpatialTile = {
@@ -120,7 +129,12 @@ export type GalaxySpatialTile = {
   systems: System[];
 };
 
-export type GalaxyLoadPhase = "download" | "decode" | "overview" | "prepare";
+export type GalaxyLoadPhase =
+  | "download"
+  | "decode"
+  | "overview"
+  | "prepare"
+  | "detail";
 
 export type GalaxyLoadProgress = {
   phase: GalaxyLoadPhase;
@@ -189,6 +203,7 @@ export type CreateOptions = {
   theme?: VisualTheme;
   onSystemClick?: (system: System | undefined) => void;
   onPlaneHeight?: (y: number) => void;
+  onZoom?: (percent: number) => void;
   onMassCode?: (code: MassCode, finest: MassCode) => void;
   onVisibleSystemsChange?: (count: number, detailCount: number) => void;
   viewCompass?: HTMLCanvasElement;

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { galaxyLoadPresentation } from "../src/loading-progress";
+import {
+  detailLoadPresentation,
+  galaxyLoadPresentation,
+} from "../src/loading-progress";
 
 describe("galaxy loading progress", () => {
   it("reports monotonic application-owned generation phases", () => {
@@ -11,5 +14,14 @@ describe("galaxy loading progress", () => {
     ];
     expect(points.map((point) => point.percent)).toEqual([28, 68, 81, 98]);
     expect(points[2]!.label).toBe("Generating the galaxy overview");
+  });
+
+  it("presents local generation progress as a clamped percentage", () => {
+    expect(
+      detailLoadPresentation({ phase: "detail", completed: 15, total: 100 }),
+    ).toEqual({ percent: 15, label: "Loaded... Please Wait" });
+    expect(
+      detailLoadPresentation({ phase: "detail", completed: 900, total: 800 }).percent,
+    ).toBe(100);
   });
 });

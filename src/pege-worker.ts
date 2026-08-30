@@ -533,6 +533,13 @@ async function generate(request: Extract<PegeWorkerRequest, { type: "generate" }
       }
       selected.sort((a, b) => a.score - b.score);
       selected.length = Math.min(selected.length, request.maximumBoxels);
+      respond({
+        type: "progress",
+        requestId: request.requestId,
+        phase: "detail",
+        completed: 0,
+        total: selected.length,
+      });
       const actualPlan = boundedLocalSamplePlan(
         boxelCount,
         Math.max(1, selected.length),
@@ -564,11 +571,25 @@ async function generate(request: Extract<PegeWorkerRequest, { type: "generate" }
             actualPlan.systemThreshold,
           );
         }
+        respond({
+          type: "progress",
+          requestId: request.requestId,
+          phase: "detail",
+          completed: index + 1,
+          total: selected.length,
+        });
         if ((index + 1) % yieldEvery === 0) {
           await new Promise<void>((resolve) => setTimeout(resolve, 0));
         }
       }
     } else {
+      respond({
+        type: "progress",
+        requestId: request.requestId,
+        phase: "detail",
+        completed: 0,
+        total: 1,
+      });
       for await (const tile of streamPackedGalaxyRegionAsync(
         pege,
         region,
@@ -583,6 +604,13 @@ async function generate(request: Extract<PegeWorkerRequest, { type: "generate" }
       }
     }
     flush();
+    respond({
+      type: "progress",
+      requestId: request.requestId,
+      phase: "detail",
+      completed: 1,
+      total: 1,
+    });
     respond({ type: "complete", requestId: request.requestId });
   } catch (error) {
     if (controller.signal.aborted) {
@@ -735,6 +763,18 @@ async function generateTiles(
   active.set(request.requestId, controller);
   try {
     const pege = await engine(request.requestId);
+    const total = request.tiles.reduce(
+      (sum, tile) => sum + Math.max(0, tile.targetSystems),
+      0,
+    );
+    const completedByTile = new Map<string, number>();
+    respond({
+      type: "progress",
+      requestId: request.requestId,
+      phase: "detail",
+      completed: 0,
+      total,
+    });
     for await (const chunk of streamPackedGalaxyTilesAsync(
       pege,
       {
@@ -758,6 +798,17 @@ async function generateTiles(
           stellarRadii: chunk.stellarRadii,
         },
       );
+      const target = request.tiles.find(
+        (tile) => galaxyViewTileKeyString(tile.key) === chunk.tileKeyString,
+      )?.targetSystems ?? 0;
+      completedByTile.set(
+        chunk.tileKeyString,
+        Math.min(
+          target,
+          chunk.sample.selectionOffset +
+            batch.records.byteLength / GALAXY_SYSTEM_STRIDE_BYTES,
+        ),
+      );
       respond(
         {
           type: "tile-batch",
@@ -769,10 +820,24 @@ async function generateTiles(
         },
         packedBatchTransfers(batch),
       );
+      respond({
+        type: "progress",
+        requestId: request.requestId,
+        phase: "detail",
+        completed: [...completedByTile.values()].reduce((sum, value) => sum + value, 0),
+        total,
+      });
     }
     if (controller.signal.aborted) {
       respond({ type: "cancelled", requestId: request.requestId });
     } else {
+      respond({
+        type: "progress",
+        requestId: request.requestId,
+        phase: "detail",
+        completed: 1,
+        total: 1,
+      });
       respond({ type: "complete", requestId: request.requestId });
     }
   } catch (error) {

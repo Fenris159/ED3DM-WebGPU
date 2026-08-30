@@ -19,7 +19,7 @@ import type {
   VisualTheme,
 } from "./types";
 import { colorFor } from "./palettes";
-import { attachScene, type SceneHandle } from "./scene";
+import { attachScene, cameraZoomPercent, type SceneHandle } from "./scene";
 import {
   cameraResidencyTilePlan,
   pegeTileKeyString,
@@ -243,6 +243,9 @@ export const ED3DM = {
             },
             cameraDistanceLy,
             lod,
+            detailProgressRange: source.loadSpatialTiles
+              ? { start: 0, end: 0.35 }
+              : { start: 0, end: 1 },
           },
           controller.signal,
         );
@@ -286,12 +289,19 @@ export const ED3DM = {
       sourceSpatialRequestKey = requestKey;
       try {
         const progressiveTiles = [];
-        for (const shell of progressivePegeTileShells(keyWeights, totalTargetSystems)) {
+        const shells = progressivePegeTileShells(keyWeights, totalTargetSystems);
+        const spatialStart = cameraDistanceLy < 180 ? 0.35 : 0;
+        for (const [index, shell] of shells.entries()) {
+          const shellStart =
+            spatialStart + ((1 - spatialStart) * index) / shells.length;
+          const shellEnd =
+            spatialStart + ((1 - spatialStart) * (index + 1)) / shells.length;
           const tiles = await source.loadSpatialTiles(
             {
               keys: shell.keyWeights.map(({ key }) => key),
               totalTargetSystems: shell.totalTargetSystems,
               keyWeights: shell.keyWeights,
+              detailProgressRange: { start: shellStart, end: shellEnd },
             },
             controller.signal,
           );
@@ -762,10 +772,12 @@ export const ED3DM = {
             void map.focus(coords);
           },
           onViewChange(view) {
+            options.onZoom?.(cameraZoomPercent(view.distanceLy));
             if (!source) return;
             scheduleViewLod(view, 35);
           },
           onViewIdle(view) {
+            options.onZoom?.(cameraZoomPercent(view.distanceLy));
             if (!source) {
               acceptView(view);
               if (view.distanceLy < 8_000) void map.focus(view.target);
@@ -786,6 +798,7 @@ export const ED3DM = {
         cameraView = scene.viewState();
         cameraDistanceLy = cameraView.distanceLy;
         focusAt = cameraView.target;
+        options.onZoom?.(cameraZoomPercent(cameraDistanceLy));
         paint();
         if (source?.loadSpatialTiles) {
           void applyLod().then(paint).catch(reportDetailLoadError);

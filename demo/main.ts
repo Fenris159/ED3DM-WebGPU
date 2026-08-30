@@ -1,7 +1,10 @@
 import { ED3DM, MASS_CODES, PegeGalaxySource, distanceFromSol } from "../src/index";
 import pegeRuntimeUrl from "pege/pege-runtime.bin?url";
 import { heightRailLayout } from "./hud-layout";
-import { galaxyLoadPresentation } from "../src/loading-progress";
+import {
+  detailLoadPresentation,
+  galaxyLoadPresentation,
+} from "../src/loading-progress";
 import type {
   Ed3dmMap,
   GalaxyLoadProgress,
@@ -23,12 +26,15 @@ const loadingDetail = document.querySelector("#loading-detail") as HTMLElement;
 const loadingProgress = document.querySelector("#loading-progress") as HTMLElement;
 const loadingProgressFill = document.querySelector("#loading-progress-fill") as HTMLElement;
 const loadingPercent = document.querySelector("#loading-percent") as HTMLElement;
+const detailLoadingStatus = document.querySelector("#detail-loading-status") as HTMLElement;
+const detailLoadingPercent = document.querySelector("#detail-loading-percent") as HTMLElement;
 const filter = document.querySelector("#filter") as HTMLSelectElement;
 const grid = document.querySelector("#grid") as HTMLInputElement;
 const regions = document.querySelector("#regions") as HTMLInputElement;
 const height = document.querySelector("#height") as HTMLInputElement;
 const heightFill = document.querySelector("#height-fill") as HTMLElement;
 const heightReadout = document.querySelector("#height-readout") as HTMLElement;
+const zoomPercent = document.querySelector("#zoom-percent") as HTMLElement;
 const heightUp = document.querySelector("#height-up") as HTMLButtonElement;
 const heightDown = document.querySelector("#height-down") as HTMLButtonElement;
 const masscode = document.querySelector("#masscode") as HTMLSelectElement;
@@ -40,6 +46,7 @@ let map: Ed3dmMap;
 let lodRevision = 0;
 let finestMassCode: MassCode = "h";
 let visibleDetailCount = 0;
+let detailLoadingHideTimer = 0;
 const pegeRuntimeV15Url = `${pegeRuntimeUrl}${pegeRuntimeUrl.includes("?") ? "&" : "?"}v=1.5.0`;
 
 function syncHeightRailLayout() {
@@ -72,6 +79,25 @@ function setLoading(percent: number, label: string) {
 function updateLoading(progress: GalaxyLoadProgress) {
   const presentation = galaxyLoadPresentation(progress);
   setLoading(presentation.percent, presentation.label);
+}
+
+function updateDetailLoading(progress: GalaxyLoadProgress) {
+  const presentation = detailLoadPresentation(progress);
+  window.clearTimeout(detailLoadingHideTimer);
+  detailLoadingPercent.textContent = `${presentation.percent}%`;
+  detailLoadingStatus.hidden = false;
+  detailLoadingStatus.setAttribute("aria-label", `${presentation.percent}% ${presentation.label}`);
+  detailLoadingHideTimer = window.setTimeout(
+    () => {
+      detailLoadingStatus.hidden = true;
+    },
+    presentation.percent >= 100 ? 450 : 30_000,
+  );
+}
+
+function updateEngineProgress(progress: GalaxyLoadProgress) {
+  if (progress.phase === "detail") updateDetailLoading(progress);
+  else updateLoading(progress);
 }
 
 function syncLodReadout() {
@@ -113,6 +139,10 @@ function syncHeightUi(y: number) {
   heightDown.disabled = n <= min;
 }
 
+function syncZoomUi(percent: number) {
+  zoomPercent.textContent = `${Math.min(100, Math.max(0, Math.round(percent)))}%`;
+}
+
 function applyHeight(y: number) {
   const n = snapHeight(y);
   height.value = String(n);
@@ -142,9 +172,8 @@ function bindHeightNudge(button: HTMLButtonElement, delta: number) {
 }
 
 function show(system: System | undefined) {
-  hint.textContent = system
-    ? "Connected neighbors are on selection rails · Click empty space or Close to unlock · Right-drag pans X/Z · Scroll zooms"
-    : "Click any factual star · Density glow is not selectable · Drag rotates · Right-drag pans X/Z · Scroll zooms";
+  hint.textContent =
+    "Left-drag rotates freely · Right-drag grabs and pans X/Z · Scroll zooms";
   if (!system) {
     panel.classList.remove("open");
     panel.textContent = "";
@@ -197,7 +226,7 @@ function updateCount() {
 async function main() {
   const source = new PegeGalaxySource({
     runtimeUrl: pegeRuntimeV15Url,
-    onProgress: updateLoading,
+    onProgress: updateEngineProgress,
   });
   map = await ED3DM.create({
     container: "#edmap",
@@ -206,6 +235,7 @@ async function main() {
     theme: "realistic",
     onSystemClick: show,
     onPlaneHeight: syncHeightUi,
+    onZoom: syncZoomUi,
     onMassCode: syncMassCodeUi,
     onVisibleSystemsChange(count, detailCount) {
       visibleDetailCount = detailCount;
@@ -364,6 +394,7 @@ async function main() {
 
   map.setGrid(grid.checked);
   map.setRegionGrid(regions.checked);
+  map.setMassCode(masscode.value as MassCode);
   syncHeightUi(0);
 }
 

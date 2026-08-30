@@ -342,8 +342,20 @@ describe("galaxy presentation and interaction regressions", () => {
       /data-theme="realistic" aria-pressed="true" title="Realistic stars"/,
     );
     expect(html).toContain("Downloading PEGE 1.5 engine data");
-    expect(html).toContain("Density glow is not selectable");
-    expect(html).toContain("Right-drag pans X/Z");
+    expect(html).toContain('id="detail-loading-status"');
+    expect(html).toContain("Loaded... Please Wait");
+    expect(html).not.toContain("Density glow is not selectable");
+    expect(html).not.toContain("Click any factual star");
+    expect(html).toContain("Left-drag rotates freely");
+    expect(html).toContain("Right-drag grabs and pans X/Z");
+    expect(html).toContain("<span>zoom</span>");
+    expect(html).toContain('id="zoom-percent"');
+    expect(html).toMatch(/<option value="h" selected>h · 1280 ly<\/option>/);
+    expect(html).not.toMatch(/id="grid"[^>]+checked/);
+    expect(html).not.toMatch(/id="regions"[^>]+checked/);
+    expect(html).not.toContain('optgroup label="Generation"');
+    expect(html).not.toContain('value="generation:authored"');
+    expect(html).toContain('optgroup label="Primary star"');
   });
 
   it("keeps primary and muted UI text readable in every theme", () => {

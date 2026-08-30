@@ -20,6 +20,7 @@ import {
 } from "../src/pege-worker";
 import {
   massCodesForView,
+  mapDetailProgress,
   maximumBoxelsForView,
   PegeGalaxySource,
   thresholdForView,
@@ -106,6 +107,19 @@ function packedStellarRecord(): ArrayBuffer {
 }
 
 describe("PEGE galaxy adapter", () => {
+  it("maps successive local-detail requests into one monotonic progress range", () => {
+    expect(mapDetailProgress(5, 10, { start: 0.35, end: 0.55 })).toEqual({
+      phase: "detail",
+      completed: 0.45,
+      total: 1,
+    });
+    expect(mapDetailProgress(12, 10, { start: 0.55, end: 1 })).toEqual({
+      phase: "detail",
+      completed: 1,
+      total: 1,
+    });
+  });
+
   it("attaches decoded generated names to packed ordinary Systems", () => {
     const records = packedRecord();
     const view = new DataView(records);
@@ -825,6 +839,17 @@ describe("PEGE galaxy adapter", () => {
     const request = loadSpatialTiles.mock.calls.at(-1)![0];
     expect(request.keyWeights?.length).toBeGreaterThan(1);
     expect(request.keyWeights?.some(({ weight }) => weight < 1)).toBe(true);
+    const progressRanges = loadSpatialTiles.mock.calls.map(
+      ([tileRequest]) => tileRequest.detailProgressRange!,
+    );
+    expect(progressRanges[0]?.start).toBeCloseTo(0.35);
+    expect(progressRanges.at(-1)?.end).toBe(1);
+    expect(
+      progressRanges.every(
+        (range, index) =>
+          index === 0 || range.start >= progressRanges[index - 1]!.end,
+      ),
+    ).toBe(true);
     map.destroy();
   });
 
