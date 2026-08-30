@@ -834,22 +834,34 @@ export const ED3DM = {
           onSelectSystem(index) {
             const sys = visible()[index];
             if (!sys) return;
+            const revision = ++flyRevision;
             selected = sys;
             options.onSystemClick?.(sys);
             scene?.flyCamera(sys.coords);
             paint();
-            if (
-              source &&
-              sys.id64 !== undefined &&
-              sys.name.startsWith("ID64 ")
-            ) {
-              void source.resolveDisplayName(String(sys.id64)).then((name) => {
-                if (!name || String(selected?.id64) !== String(sys.id64)) return;
+            if (!source || sys.id64 === undefined) return;
+            const id64 = String(sys.id64);
+            void source.resolve(id64)
+              .then(async (resolved) => {
+                if (revision !== flyRevision || String(selected?.id64) !== id64) return;
+                if (resolved) {
+                  selected = resolved;
+                  options.onSystemClick?.(resolved);
+                  paint();
+                  return;
+                }
+                if (!sys.name.startsWith("ID64 ")) return;
+                const name = await source.resolveDisplayName(id64);
+                if (
+                  !name ||
+                  revision !== flyRevision ||
+                  String(selected?.id64) !== id64
+                ) return;
                 sys.name = name;
                 options.onSystemClick?.(sys);
                 paint();
-              });
-            }
+              })
+              .catch(reportDetailLoadError);
           },
           onPickCell(coords) {
             if (selected) {

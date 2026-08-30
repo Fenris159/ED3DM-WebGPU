@@ -12,6 +12,49 @@ export type StellarValidation = {
   displayColor?: StellarFieldValidation;
 };
 
+export type StellarParentReference = {
+  bodyType: "Null" | "Star" | "Planet";
+  bodyId: number;
+};
+
+export type StellarOrbitalElements = {
+  semiMajorAxisMeters?: number;
+  eccentricity?: number;
+  orbitalInclinationDegrees?: number;
+  periapsisDegrees?: number;
+  orbitalPeriodSeconds?: number;
+};
+
+export type StellarRing = {
+  name: string;
+  ringClass: string;
+  massMegatonnes: number;
+  innerRadiusMeters: number;
+  outerRadiusMeters: number;
+};
+
+export type StellarComponentDetails = {
+  bodyId: number;
+  name?: string;
+  parents?: StellarParentReference[];
+  starType: string;
+  subclass?: number;
+  luminosityClass?: string;
+  stellarMassSolar?: number;
+  radiusMeters?: number;
+  absoluteMagnitude?: number;
+  rotationPeriodSeconds?: number;
+  surfaceTemperatureKelvin?: number;
+  ageMyr?: number;
+  axialTiltRadians?: number;
+  distanceFromArrivalLightSeconds?: number;
+  orbitalElements?: StellarOrbitalElements;
+  rings?: StellarRing[];
+  stellarColor?: string;
+  validation: StellarFieldValidation;
+  stellarValidation?: StellarValidation;
+};
+
 export type System = {
   name: string;
   coords: Coords;
@@ -30,6 +73,8 @@ export type System = {
   stellarProfileValidation?: StellarFieldValidation;
   stellarValidation?: StellarValidation;
   stellarProfileComposition?: "complete" | "partial";
+  stellarPrimaryBodyId?: number;
+  stellarComponents?: StellarComponentDetails[];
   population?: number;
   primary_economy?: string;
   allegiance?: string;

@@ -376,7 +376,7 @@ describe("galaxy presentation and interaction regressions", () => {
     expect(html).toMatch(
       /data-theme="realistic" aria-pressed="true" title="Realistic stars"/,
     );
-    expect(html).toContain("Downloading PEGE 1.5 engine data");
+    expect(html).toContain("Downloading PEGE 1.6 engine data");
     expect(html).toContain('id="detail-loading-status"');
     expect(html).toContain("Loaded... Please Wait");
     expect(html).not.toContain("Density glow is not selectable");
@@ -390,7 +390,11 @@ describe("galaxy presentation and interaction regressions", () => {
     expect(html).not.toMatch(/id="regions"[^>]+checked/);
     expect(html).not.toContain('optgroup label="Generation"');
     expect(html).not.toContain('value="generation:authored"');
-    expect(html).toContain('optgroup label="Primary star"');
+    expect(html).toContain('id="filter-options"');
+    expect(html).toContain('id="filter-summary"');
+    expect(html).toMatch(/#detail-loading-status\s*\{[^}]*background: var\(--surface\)/s);
+    expect(html).toMatch(/#panel\s*\{[^}]*max-height: calc\(100vh - 144px\)/s);
+    expect(html).not.toMatch(/#panel\s*\{[^}]*bottom: 72px/s);
   });
 
   it("keeps primary and muted UI text readable in every theme", () => {

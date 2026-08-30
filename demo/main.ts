@@ -1,4 +1,4 @@
-import { ED3DM, MASS_CODES, PegeGalaxySource, distanceFromSol } from "../src/index";
+import { ED3DM, MASS_CODES, PegeGalaxySource } from "../src/index";
 import pegeRuntimeUrl from "pege/pege-runtime.bin?url";
 import { heightRailLayout } from "./hud-layout";
 import {
@@ -12,6 +12,12 @@ import type {
   System,
   VisualTheme,
 } from "../src/index";
+import {
+  STELLAR_FILTER_GROUPS,
+  renderSystemDetails,
+  stellarFilterLabel,
+  stellarTypesForFilterKeys,
+} from "./stellar-ui";
 
 const panel = document.querySelector("#panel") as HTMLElement;
 const search = document.querySelector("#search") as HTMLInputElement;
@@ -29,7 +35,9 @@ const loadingPercent = document.querySelector("#loading-percent") as HTMLElement
 const detailLoadingStatus = document.querySelector("#detail-loading-status") as HTMLElement;
 const detailLoadingPercent = document.querySelector("#detail-loading-percent") as HTMLElement;
 const detailLoadingCopy = document.querySelector("#detail-loading-copy") as HTMLElement;
-const filter = document.querySelector("#filter") as HTMLSelectElement;
+const filter = document.querySelector("#filter") as HTMLDetailsElement;
+const filterOptions = document.querySelector("#filter-options") as HTMLElement;
+const filterSummary = document.querySelector("#filter-summary") as HTMLElement;
 const grid = document.querySelector("#grid") as HTMLInputElement;
 const regions = document.querySelector("#regions") as HTMLInputElement;
 const height = document.querySelector("#height") as HTMLInputElement;
@@ -48,7 +56,7 @@ let lodRevision = 0;
 let finestMassCode: MassCode = "h";
 let visibleDetailCount = 0;
 let detailLoadingHideTimer = 0;
-const pegeRuntimeV15Url = `${pegeRuntimeUrl}${pegeRuntimeUrl.includes("?") ? "&" : "?"}v=1.5.0`;
+const pegeRuntimeV16Url = `${pegeRuntimeUrl}${pegeRuntimeUrl.includes("?") ? "&" : "?"}v=1.6.0`;
 
 function syncHeightRailLayout() {
   const layout = heightRailLayout({
@@ -194,27 +202,7 @@ function show(system: System | undefined) {
     return;
   }
   panel.classList.add("open");
-  const stellarClass = system.stellarType
-    ? `${system.stellarType}${system.stellarSubclass ?? ""}${system.stellarLuminosityClass ? ` ${system.stellarLuminosityClass}` : ""}`
-    : "unresolved";
-  const stellarProfile = system.stellarProfileSource
-    ? `${system.stellarProfileValidation ?? "unknown"} ${system.stellarProfileSource} (${system.stellarProfileComposition ?? "partial"})`
-    : "unresolved by PEGE 1.5";
-  const radius = system.stellarRadiusMeters
-    ? `${(system.stellarRadiusMeters / 695_700_000).toFixed(3)} solar radii`
-    : "not supplied";
-  panel.innerHTML = `<button type="button" id="deselect">Close</button>
-    <h2>${system.name}</h2>
-    <p>ID64 ${system.id64 ?? "—"}</p>
-    <p>Generation ${system.generation ?? "catalogue"}</p>
-    <p>Elite space ${system.coords.x.toFixed(2)}, ${system.coords.y.toFixed(2)}, ${system.coords.z.toFixed(2)}</p>
-    <p>Distance from Sol ${distanceFromSol(system.coords).toFixed(2)} ly</p>
-    <p>Position ${system.exactPosition ? "exact PEGE generation" : "generated"}</p>
-    <p>Primary ${stellarClass}</p>
-    <p>Profile ${stellarProfile}</p>
-    <p>Mass ${system.stellarMassSolar?.toFixed(4) ?? "not supplied"} solar masses</p>
-    <p>Radius ${radius}</p>
-    <p>Temperature ${system.stellarTemperatureKelvin?.toFixed(0) ?? "not supplied"} K</p>`;
+  panel.innerHTML = renderSystemDetails(system);
   panel.querySelector("#deselect")?.addEventListener("click", () => {
     map.clearSelection();
     show(undefined);
@@ -239,7 +227,7 @@ function updateCount() {
 
 async function main() {
   const source = new PegeGalaxySource({
-    runtimeUrl: pegeRuntimeV15Url,
+    runtimeUrl: pegeRuntimeV16Url,
     onProgress: updateEngineProgress,
   });
   map = await ED3DM.create({
@@ -369,19 +357,58 @@ async function main() {
       if (revision === lodRevision) updateCount();
     });
   });
-  filter.addEventListener("change", () => {
-    const value = filter.value;
-    if (value.startsWith("generation:")) {
-      map.setFilter({
-        generations: [
-          value.slice("generation:".length) as NonNullable<System["generation"]>,
-        ],
-      });
-    } else if (value.startsWith("stellar:")) {
-      map.setFilter({ stellarTypes: [value.slice("stellar:".length)] });
-    } else {
-      map.setFilter({});
+  const allFilter = document.createElement("input");
+  allFilter.type = "checkbox";
+  allFilter.value = "all";
+  allFilter.checked = true;
+  const allLabel = document.createElement("label");
+  allLabel.className = "filter-all";
+  allLabel.append(allFilter, document.createTextNode("All"));
+  filterOptions.append(allLabel);
+
+  for (const group of STELLAR_FILTER_GROUPS) {
+    const fieldset = document.createElement("fieldset");
+    const legend = document.createElement("legend");
+    legend.textContent = group.label;
+    fieldset.append(legend);
+    for (const choice of group.choices) {
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.name = "stellar-filter";
+      input.value = choice.key;
+      const label = document.createElement("label");
+      const text = document.createElement("span");
+      text.textContent = choice.label;
+      label.append(input, text);
+      if (choice.description) {
+        const description = document.createElement("small");
+        description.textContent = choice.description;
+        label.append(description);
+      }
+      fieldset.append(label);
     }
+    filterOptions.append(fieldset);
+  }
+
+  filterOptions.addEventListener("change", (event) => {
+    const changed = event.target as HTMLInputElement;
+    if (changed === allFilter && allFilter.checked) {
+      filterOptions
+        .querySelectorAll<HTMLInputElement>('input[name="stellar-filter"]')
+        .forEach((input) => { input.checked = false; });
+    } else if (changed.name === "stellar-filter") {
+      allFilter.checked = false;
+    }
+    const keys = Array.from(
+      filterOptions.querySelectorAll<HTMLInputElement>(
+        'input[name="stellar-filter"]:checked',
+      ),
+      (input) => input.value,
+    );
+    if (keys.length === 0) allFilter.checked = true;
+    filterSummary.textContent = stellarFilterLabel(keys);
+    filterSummary.title = filterSummary.textContent;
+    map.setFilter({ stellarTypes: stellarTypesForFilterKeys(keys) });
     updateCount();
   });
   grid.addEventListener("change", () => map.setGrid(grid.checked));

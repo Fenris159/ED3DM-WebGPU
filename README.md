@@ -17,7 +17,7 @@ npm test
 npm run dev
 ```
 
-Vite bundles the pinned PEGE 1.5 runtime as a versioned static asset. On first load, the Map app asks PEGE for a deterministic, coverage-first 50,000-System galaxy overview across all eight mass codes using the `presentation-balanced` stellar LOD policy. PEGE emits its final Systems at exact positions, with authored and generated display names decoded from their identities. ED3DM stores that overview in IndexedDB and keeps all 50,000 Systems as the far-field floor at every LOD; authored names therefore remain part of the same population as every other System. The complete authored catalogue stays private to PEGE for exact search and any placement knowledge required by reconstruction.
+Vite bundles the pinned PEGE 1.6 runtime as a versioned static asset. On first load, the Map app asks PEGE for a deterministic, coverage-first 50,000-System galaxy overview across all eight mass codes using the `presentation-balanced` stellar LOD policy. PEGE emits its final Systems at exact positions, with authored and generated display names decoded from their identities. ED3DM stores that overview in IndexedDB and keeps all 50,000 Systems as the far-field floor at every LOD; authored names therefore remain part of the same population as every other System. The complete authored catalogue stays private to PEGE for exact search and any placement knowledge required by reconstruction.
 
 PEGE positions remain in raw Sol-relative Elite space. Sol is `(0,0,0)` and no catalogue-era translation is applied to any System. The Stellar Forge origin is used only to draw boxel faces around those coordinates.
 
@@ -40,7 +40,7 @@ Selecting a System moves the X/Z grid plane to its exact Y coordinate and create
 - **Paper** and **charcoal** are artistic ED3DM themes.
 - **Realistic**, the default, consumes the primary star’s PEGE `displayColor` and `radiusMeters` when a Stellar profile is available.
 
-PEGE 1.5 bulk-packs engine-owned primary Stellar profiles alongside spatial records. ED3DM uses the supplied display color, class, mass, temperature, and optional radius, while retaining independent exact, observed, or estimated validation for every present field. Missing optional values stay missing instead of being invented from names or ID64s.
+PEGE 1.6 bulk-packs engine-owned primary Stellar profiles alongside spatial records. ED3DM uses the primary display color, class, mass, temperature, and optional radius supplied by PEGE. A selected System is resolved through PEGE's structured profile contract so every available primary and secondary Stellar component can be shown. Missing optional values stay missing instead of being invented from names or ID64s.
 
 ## Embed
 

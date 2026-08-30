@@ -12,6 +12,7 @@ import {
   streamPackedGalaxyViewAsync,
   streamPackedGalaxyRegionAsync,
   type GalaxyEngineDataset,
+  type StellarComponent,
 } from "pege";
 import type {
   PackedSystemBatch,
@@ -415,6 +416,70 @@ function srgbHex(srgb: readonly [number, number, number]): string {
     .join("")}`;
 }
 
+function resolvedComponent(
+  component: StellarComponent,
+) {
+  const validation = component.validation;
+  return {
+    bodyId: component.bodyId,
+    ...(component.name === undefined ? {} : { name: component.name }),
+    ...(component.parents === undefined ? {} : {
+      parents: component.parents.map((parent) => ({ ...parent })),
+    }),
+    starType: component.starType,
+    ...(component.subclass === undefined ? {} : { subclass: component.subclass }),
+    ...(component.luminosityClass === undefined ? {} : {
+      luminosityClass: component.luminosityClass,
+    }),
+    ...(component.stellarMassSolar === undefined ? {} : {
+      stellarMassSolar: component.stellarMassSolar,
+    }),
+    ...(component.radiusMeters === undefined ? {} : { radiusMeters: component.radiusMeters }),
+    ...(component.absoluteMagnitude === undefined ? {} : {
+      absoluteMagnitude: component.absoluteMagnitude,
+    }),
+    ...(component.rotationPeriodSeconds === undefined ? {} : {
+      rotationPeriodSeconds: component.rotationPeriodSeconds,
+    }),
+    ...(component.surfaceTemperatureKelvin === undefined ? {} : {
+      surfaceTemperatureKelvin: component.surfaceTemperatureKelvin,
+    }),
+    ...(component.ageMyr === undefined ? {} : { ageMyr: component.ageMyr }),
+    ...(component.axialTiltRadians === undefined ? {} : {
+      axialTiltRadians: component.axialTiltRadians,
+    }),
+    ...(component.distanceFromArrivalLightSeconds === undefined ? {} : {
+      distanceFromArrivalLightSeconds: component.distanceFromArrivalLightSeconds,
+    }),
+    ...(component.orbitalElements === undefined ? {} : {
+      orbitalElements: { ...component.orbitalElements },
+    }),
+    ...(component.rings === undefined ? {} : {
+      rings: component.rings.map((ring) => ({ ...ring })),
+    }),
+    ...(component.displayColor === undefined ? {} : {
+      stellarColor: srgbHex(component.displayColor.srgb),
+    }),
+    validation,
+    stellarValidation: {
+      starType: component.attributeValidation?.starType ?? validation,
+      ...(component.stellarMassSolar === undefined ? {} : {
+        mass: component.attributeValidation?.stellarMassSolar ?? validation,
+      }),
+      ...(component.surfaceTemperatureKelvin === undefined ? {} : {
+        temperature:
+          component.attributeValidation?.surfaceTemperatureKelvin ?? validation,
+      }),
+      ...(component.radiusMeters === undefined ? {} : {
+        radius: component.attributeValidation?.radiusMeters ?? validation,
+      }),
+      ...(component.displayColor === undefined ? {} : {
+        displayColor: component.attributeValidation?.displayColor ?? validation,
+      }),
+    },
+  };
+}
+
 function withResolvedProfile(
   pege: Pege,
   address: bigint,
@@ -427,6 +492,7 @@ function withResolvedProfile(
     profile.components.find((component) => component.bodyId === profile.primaryBodyId) ??
     profile.components[0];
   if (!primary) return system;
+  const components = profile.components.map(resolvedComponent);
   return {
     ...system,
     stellarColor: primary.displayColor ? srgbHex(primary.displayColor.srgb) : undefined,
@@ -458,6 +524,8 @@ function withResolvedProfile(
           : (primary.attributeValidation?.displayColor ?? primary.validation),
     },
     stellarProfileComposition: profile.composition,
+    stellarPrimaryBodyId: profile.primaryBodyId,
+    stellarComponents: components,
   };
 }
 

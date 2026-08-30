@@ -16,6 +16,7 @@ import {
 import {
   combinePackedBatches,
   populatePackedDisplayNames,
+  resolvePegeQuery,
   thinPackedBatch,
 } from "../src/pege-worker";
 import {
@@ -144,6 +145,63 @@ describe("PEGE galaxy adapter", () => {
     ]);
   });
 
+  it("carries every PEGE stellar component through selected-System resolution", () => {
+    const pege = {
+      resolveAddress: vi.fn(() => ({
+        status: "procedural" as const,
+        branch: "ordinary" as const,
+        systemAddress: 42n,
+        position: { starPosXyz: [1, 2, 3] as const },
+      })),
+      resolveDisplayName: vi.fn(() => ({
+        status: "resolved" as const,
+        name: "Test System",
+      })),
+      resolveStellarProfile: vi.fn(() => ({
+        status: "resolved" as const,
+        source: "compiled-catalogue" as const,
+        profile: {
+          systemAddress: 42n,
+          primaryBodyId: 0,
+          composition: "complete" as const,
+          components: [
+            {
+              bodyId: 0,
+              starType: "G" as const,
+              subclass: 2,
+              luminosityClass: "V" as const,
+              stellarMassSolar: 1,
+              surfaceTemperatureKelvin: 5778,
+              displayColor: { srgb: [1, 0.9, 0.6] as const, source: "engine-palette" as const },
+              provenance: "procedural-engine" as const,
+              validation: "exact" as const,
+            },
+            {
+              bodyId: 1,
+              name: "Test System B",
+              parents: [{ bodyType: "Null" as const, bodyId: 0 }],
+              starType: "M" as const,
+              subclass: 4,
+              luminosityClass: "V" as const,
+              stellarMassSolar: 0.3,
+              provenance: "procedural-engine" as const,
+              validation: "exact" as const,
+            },
+          ],
+        },
+      })),
+    };
+
+    expect(resolvePegeQuery(pege as never, "42")).toEqual(
+      expect.objectContaining({
+        stellarComponents: [
+          expect.objectContaining({ bodyId: 0, starType: "G", subclass: 2 }),
+          expect.objectContaining({ bodyId: 1, name: "Test System B", starType: "M" }),
+        ],
+      }),
+    );
+  });
+
   it("versions every PEGE view-selection input in the overview cache identity", () => {
     expect(PEGE_OVERVIEW_CONFIG).toEqual({
       minimumFixedXyz: [-1_280_000, -160_000, -451_200],
@@ -154,7 +212,7 @@ describe("PEGE galaxy adapter", () => {
       compositionVersion: "pege-final-systems-v2-display-names",
     });
     expect(pegeOverviewCacheId("/pege-runtime.bin", "https://example.test/map")).toBe(
-      `pege-1.5-spatial-v3:https://example.test/pege-runtime.bin:${GALAXY_SPATIAL_SELECTION_VERSION}:50000:42:presentation-balanced:1:-1280000,-160000,-451200:1283200,160000,2112000:pege-final-systems-v2-display-names`,
+      `pege-1.6-spatial-v3:https://example.test/pege-runtime.bin:${GALAXY_SPATIAL_SELECTION_VERSION}:50000:42:presentation-balanced:1:-1280000,-160000,-451200:1283200,160000,2112000:pege-final-systems-v2-display-names`,
     );
   });
 

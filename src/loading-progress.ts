@@ -1,7 +1,7 @@
 import type { GalaxyLoadProgress } from "./types";
 
 const PHASES = {
-  download: { start: 0, end: 55, label: "Downloading PEGE 1.5 engine data" },
+  download: { start: 0, end: 55, label: "Downloading PEGE 1.6 engine data" },
   decode: { start: 55, end: 68, label: "Decoding the galaxy engine" },
   overview: { start: 68, end: 94, label: "Generating the galaxy overview" },
   prepare: { start: 94, end: 98, label: "Preparing the map" },

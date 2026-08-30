@@ -2,6 +2,7 @@ import type {
   GalaxyLoadPhase,
   GenerationKind,
   PegeSpatialTileKey,
+  StellarComponentDetails,
   SystemLocationPreview,
   SystemSuggestion,
 } from "./types";
@@ -94,6 +95,8 @@ export type ResolvedPegeSystem = {
     displayColor?: "exact" | "observed" | "estimated";
   };
   stellarProfileComposition?: "complete" | "partial";
+  stellarPrimaryBodyId?: number;
+  stellarComponents?: StellarComponentDetails[];
 };
 
 export type PegeWorkerResponse =
