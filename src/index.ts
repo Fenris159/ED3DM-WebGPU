@@ -149,7 +149,7 @@ export const ED3DM = {
     let categoryFilter: string[] | undefined;
     let generationFilter: System["generation"][] | undefined;
     let stellarTypeFilter: string[] | undefined;
-    let excludedStellarTypeFilter: string[] | undefined;
+    let excludedStellarTypeFilter: string[] | undefined = ["RoguePlanet"];
     let showGrid = true;
     let showRegionGrid = true;
     let theme: VisualTheme = options.theme ?? "realistic";
@@ -624,11 +624,15 @@ export const ED3DM = {
         const stellarTypeExcluded =
           s.stellarType !== undefined &&
           Boolean(excludedStellarTypeFilter?.includes(s.stellarType));
+        const nonRenderedStellarObject =
+          s.stellarType === "Nebula" ||
+          s.stellarType === "StellarRemnantNebula";
         return (
           categoryMatch &&
           generationMatch &&
           stellarTypeMatch &&
-          !stellarTypeExcluded
+          !stellarTypeExcluded &&
+          !nonRenderedStellarObject
         );
       });
     }
@@ -851,7 +855,8 @@ export const ED3DM = {
         categoryFilter = filter.categories;
         generationFilter = filter.generations;
         stellarTypeFilter = filter.stellarTypes;
-        excludedStellarTypeFilter = filter.excludedStellarTypes;
+        excludedStellarTypeFilter = filter.excludedStellarTypes ??
+          (filter.stellarTypes?.length ? undefined : ["RoguePlanet"]);
         paint();
       },
       setColorBy(mode) {

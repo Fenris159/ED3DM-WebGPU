@@ -10,7 +10,7 @@ const OVERVIEW = {
       cy: 0,
       cz: 0,
       size: 80,
-      count: 3,
+      count: 4,
       tile: "tiles/sol.json",
     },
   ],
@@ -41,6 +41,12 @@ const TILE = {
       coords: { x: 2, y: 0, z: 0 },
       cat: ["extra"],
       stellarType: "RoguePlanet",
+    },
+    {
+      name: "Veil",
+      coords: { x: 3, y: 0, z: 0 },
+      cat: ["extra"],
+      stellarType: "Nebula",
     },
   ],
 };
@@ -74,15 +80,11 @@ describe("color-by and Category filters", () => {
       catalog: { overviewUrl: "/catalog/overview.json" },
     });
     await map.focus({ x: 0, y: 0, z: 0 });
-    expect(map.visibleSystems().map((s) => s.name).sort()).toEqual([
-      "Hutton",
-      "Nomad",
-      "Sol",
-    ]);
+    expect(map.visibleSystems().map((s) => s.name).sort()).toEqual(["Hutton", "Sol"]);
     map.setFilter({ categories: ["home"] });
     expect(map.visibleSystems().map((s) => s.name)).toEqual(["Sol"]);
     map.setFilter({});
-    expect(map.visibleSystems()).toHaveLength(3);
+    expect(map.visibleSystems().map((s) => s.name).sort()).toEqual(["Hutton", "Sol"]);
   });
 
   it("can exclude rogue planets from All and opt them in alone or with stars", async () => {
@@ -103,6 +105,16 @@ describe("color-by and Category filters", () => {
       "Nomad",
       "Sol",
     ]);
+  });
+
+  it("retains nebula metadata without admitting nebulae to the star renderer", async () => {
+    const map = await ED3DM.create({
+      container: document.body,
+      catalog: { overviewUrl: "/catalog/overview.json" },
+    });
+    await map.focus({ x: 0, y: 0, z: 0 });
+    map.setFilter({ stellarTypes: ["Nebula"] });
+    expect(map.visibleSystems()).toEqual([]);
   });
 
   it("setColorBy changes orbColor independently of the Category filter", async () => {
