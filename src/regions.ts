@@ -1,4 +1,4 @@
-import { BOXEL_ORIGIN, snapNearest } from "./boxel";
+import { MAP_GRID_ORIGIN, snapNearest } from "./boxel";
 import data from "./region-grid-data.json";
 import type { Coords } from "./types";
 
@@ -7,14 +7,14 @@ const FONT_ADVANCE = 0.58;
 
 const A_SIZE = 10;
 
-/** Snap Codex outline segments onto mass-code a faces; drop collapsed edges. */
+/** Snap Codex outlines onto the Sol-aligned map grid; drop collapsed edges. */
 export function snapRegionOutline(xz: readonly number[]): number[] {
   const out: number[] = [];
   for (let i = 0; i + 3 < xz.length; i += 4) {
-    const x1 = snapNearest(xz[i]!, BOXEL_ORIGIN.x, A_SIZE);
-    const z1 = snapNearest(xz[i + 1]!, BOXEL_ORIGIN.z, A_SIZE);
-    const x2 = snapNearest(xz[i + 2]!, BOXEL_ORIGIN.x, A_SIZE);
-    const z2 = snapNearest(xz[i + 3]!, BOXEL_ORIGIN.z, A_SIZE);
+    const x1 = snapNearest(xz[i]!, MAP_GRID_ORIGIN.x, A_SIZE);
+    const z1 = snapNearest(xz[i + 1]!, MAP_GRID_ORIGIN.z, A_SIZE);
+    const x2 = snapNearest(xz[i + 2]!, MAP_GRID_ORIGIN.x, A_SIZE);
+    const z2 = snapNearest(xz[i + 3]!, MAP_GRID_ORIGIN.z, A_SIZE);
     if (x1 === x2 && z1 === z2) continue;
     out.push(x1, z1, x2, z2);
   }
@@ -136,5 +136,4 @@ export function regionLabelPlacement(region: GalacticRegion): {
   height = Math.min(LABEL_HEIGHT_MAX, Math.max(80, height));
   return { x, z, height, upX: up.x, upZ: up.z };
 }
-
 

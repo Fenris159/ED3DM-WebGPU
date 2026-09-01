@@ -25,6 +25,7 @@ const TILE = {
       allegiance: "Federation",
       government: "Democracy",
       cat: ["home"],
+      massCode: 3,
       stellarColor: "#fff1a8",
       stellarType: "G",
     },
@@ -35,17 +36,20 @@ const TILE = {
       allegiance: "Independent",
       government: "Anarchy",
       cat: ["poi"],
+      massCode: 2,
     },
     {
       name: "Nomad",
       coords: { x: 2, y: 0, z: 0 },
       cat: ["extra"],
+      massCode: 0,
       stellarType: "RoguePlanet",
     },
     {
       name: "Veil",
       coords: { x: 3, y: 0, z: 0 },
       cat: ["extra"],
+      massCode: 7,
       stellarType: "Nebula",
     },
   ],
@@ -115,6 +119,23 @@ describe("color-by and Category filters", () => {
     await map.focus({ x: 0, y: 0, z: 0 });
     map.setFilter({ stellarTypes: ["Nebula"] });
     expect(map.visibleSystems()).toEqual([]);
+  });
+
+  it("filters System mass codes independently from the presentation-grid size", async () => {
+    const map = await ED3DM.create({
+      container: document.body,
+      catalog: { overviewUrl: "/catalog/overview.json" },
+    });
+    await map.focus({ x: 0, y: 0, z: 0 });
+    await map.setFilter({ massCodes: [3] });
+    expect(map.visibleSystems().map((system) => system.name)).toEqual(["Sol"]);
+    map.setGridSize("a");
+    expect(map.visibleSystems().map((system) => system.name)).toEqual(["Sol"]);
+    await map.setFilter({ massCodes: [0, 1, 2, 3] });
+    expect(map.visibleSystems().map((system) => system.name).sort()).toEqual([
+      "Hutton",
+      "Sol",
+    ]);
   });
 
   it("setColorBy changes orbColor independently of the Category filter", async () => {

@@ -42,7 +42,8 @@ export function localEdgeWeight(normalizedDistance: number): number {
 }
 
 export const FULL_DETAIL_CAMERA_DISTANCE_LY = 300;
-export const FULL_DETAIL_REGION_SIZE_LY = 640;
+/** Exact object residency stays small; aggregate density fills the surrounding shells. */
+export const FULL_DETAIL_REGION_SIZE_LY = 160;
 
 export function focusedResidencyRegion(
   target: { x: number; y: number; z: number },

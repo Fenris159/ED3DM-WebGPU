@@ -22,6 +22,19 @@ describe("stellar details and filters", () => {
     expect(stellarTypesForFilterKeys(["proto", "wolf-rayet", "carbon"])).toEqual(
       expect.arrayContaining(["TTS", "AeBe", "W", "WN", "WC", "WO", "C", "CN", "S"]),
     );
+    expect(stellarTypesForFilterKeys(["carbon"])).toEqual([
+      "CS", "C", "CN", "CJ", "CH", "CHd", "MS", "S",
+    ]);
+    expect(stellarTypesForFilterKeys(["neutron-star"])).toEqual(["N"]);
+    expect(stellarTypesForFilterKeys(["black-hole"])).toEqual([
+      "H",
+      "SupermassiveBlackHole",
+    ]);
+    expect(stellarTypesForFilterKeys(["exotic-remnant"])).toEqual(["X"]);
+    expect(
+      STELLAR_FILTER_GROUPS.flatMap(({ choices }) => choices)
+        .find(({ key }) => key === "exotic-remnant")?.label,
+    ).toBe("Exotic (X)");
     const mapped = new Set(
       STELLAR_FILTER_GROUPS.flatMap(({ choices }) =>
         choices.flatMap(({ types }) => types),
@@ -29,6 +42,7 @@ describe("stellar details and filters", () => {
     );
     const supported = new Set<string>(STELLAR_TYPES);
     expect(stellarTypesForFilterKeys(["rogue-planet"])).toEqual(["RoguePlanet"]);
+    expect(stellarTypesForFilterKeys(["L", "T", "Y"])).toEqual(["L", "T", "Y"]);
     expect(stellarFilterForKeys([])).toEqual({
       excludedStellarTypes: ["RoguePlanet"],
     });
@@ -84,6 +98,15 @@ describe("stellar details and filters", () => {
           stellarMassSolar: 0.3,
           validation: "exact",
         },
+        {
+          bodyId: 2,
+          name: "Test System C",
+          starType: "K",
+          subclass: 1,
+          luminosityClass: "Vab",
+          stellarMassSolar: 0.7,
+          validation: "exact",
+        },
       ],
       stellarPrimaryBodyId: 0,
     };
@@ -91,9 +114,14 @@ describe("stellar details and filters", () => {
     const html = renderSystemDetails(system);
     expect(html).toContain("Primary star");
     expect(html).toContain("G2 V");
-    expect(html).toContain("Secondary star");
-    expect(html).toContain("Test System B");
-    expect(html).toContain("M4 V");
+    expect(html).toContain("Secondary Stars");
+    expect(html).toContain('<details class="stellar-secondary">');
+    expect(html).toContain("<summary><strong>M4 V</strong></summary>");
+    expect(html).toContain("<summary><strong>K1 Vab</strong></summary>");
+    expect(html).not.toContain("Secondary star 1");
+    expect(html).not.toContain("Secondary star 2");
+    expect(html).not.toContain("Test System B");
+    expect(html).not.toContain("Test System C");
     expect(html).toContain("5,778 K");
     expect(html).toContain("Absolute magnitude");
     expect(html).toContain("Luminosity");

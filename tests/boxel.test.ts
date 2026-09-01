@@ -36,7 +36,7 @@ describe("Elite mass-code boxels", () => {
     expect(a.size).toBe(10);
     const lines = (a.maxX - a.minX) / a.size;
     expect(lines).toBeLessThanOrEqual(MAX_BOXEL_LINES + 4);
-    expect(onBoxelLattice(a.minX, BOXEL_ORIGIN.x, boxelSize("a"))).toBe(true);
+    expect(onBoxelLattice(a.minX, 0, boxelSize("a"))).toBe(true);
   });
 
   it("does not change cell size when the view AABB grows at a fixed look-at", () => {
@@ -87,7 +87,7 @@ describe("Elite mass-code boxels", () => {
     expect(tiny.maxZ - tiny.minZ).toBeGreaterThanOrEqual(MIN_BOXEL_CELLS * 10);
     expect(tiny.minX).toBeLessThanOrEqual(look.x);
     expect(tiny.maxX).toBeGreaterThanOrEqual(look.x);
-    expect(onBoxelLattice(tiny.minX, BOXEL_ORIGIN.x, 10)).toBe(true);
+    expect(onBoxelLattice(tiny.minX, 0, 10)).toBe(true);
 
     const inverted = boxelWindowForView(
       { minX: 8000, maxX: -200, minZ: 9000, maxZ: -50 },
@@ -106,13 +106,13 @@ describe("Elite mass-code boxels", () => {
       { minX: -20, maxX: 20, minZ: -20, maxZ: 20 },
       "a",
       undefined,
-      { x: 0, z: 0 },
+      { x: 5, z: 0 },
     );
     const still = boxelWindowForView(
       { minX: -20, maxX: 20, minZ: -20, maxZ: 20 },
       "a",
       first,
-      { x: 4, z: 0 },
+      { x: 9, z: 0 },
     );
     expect(still).toBe(first);
 
@@ -120,10 +120,10 @@ describe("Elite mass-code boxels", () => {
       { minX: -20, maxX: 20, minZ: -20, maxZ: 20 },
       "a",
       first,
-      { x: -10, z: 0 },
+      { x: 15, z: 0 },
     );
-    expect(first.minX - crossed.minX).toBe(a);
-    expect(first.maxX - crossed.maxX).toBe(a);
+    expect(crossed.minX - first.minX).toBe(a);
+    expect(crossed.maxX - first.maxX).toBe(a);
   });
 
   it("snaps half-box offsets onto the a-grid faces", () => {
@@ -147,14 +147,17 @@ describe("Elite mass-code boxels", () => {
     expect(effectiveBoxelMassCode("d", "a")).toBe("d");
   });
 
-  it("does not put Sol on an a-boxel corner — Stellar Forge origin is offset", () => {
-    const a = boxelSize("a");
-    expect(onBoxelLattice(0, BOXEL_ORIGIN.x, a)).toBe(false);
-    expect(onBoxelLattice(0, BOXEL_ORIGIN.y, a)).toBe(false);
-    expect(onBoxelLattice(0, BOXEL_ORIGIN.z, a)).toBe(false);
-    expect(onBoxelLattice(-5, BOXEL_ORIGIN.x, a)).toBe(true);
-    expect(onBoxelLattice(-5, BOXEL_ORIGIN.y, a)).toBe(true);
-    expect(onBoxelLattice(-5, BOXEL_ORIGIN.z, a)).toBe(true);
+  it("puts Sol on the visible map-grid corner at every selected mass-code spacing", () => {
+    for (const code of MASS_CODES) {
+      const win = boxelWindowForView(
+        { minX: -1, maxX: 1, minZ: -1, maxZ: 1 },
+        code,
+        undefined,
+        { x: 0, z: 0 },
+      );
+      expect(boxelGridXs(win)).toContain(0);
+      expect(onBoxelLattice(0, 0, boxelSize(code))).toBe(true);
+    }
   });
 
   it("treats Sol as Elite-space origin and a point inside the Forge lattice", () => {

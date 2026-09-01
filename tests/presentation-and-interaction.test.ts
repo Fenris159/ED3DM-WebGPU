@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { Color } from "three";
 import { describe, expect, it, vi } from "vitest";
 import { ED3DM } from "../src/index";
+import { orbScale } from "../src/palettes";
 import {
   stellarBrightnessScale,
   stellarLuminositySolar,
@@ -18,6 +19,7 @@ import {
   orbCloud,
   orbPickRadiusWorld,
   projectedOrbDiameter,
+  softDiscAlpha,
   stableOrbVisibility,
   stableOrbNoise,
   densityFieldColor,
@@ -35,10 +37,77 @@ import {
   planarPanDelta,
   createSceneResizeScheduler,
   scenePixelRatio,
+  localNameLabelIndexes,
+  localNameLabelSystems,
+  localSystemNamesVisible,
+  translatedCameraPosition,
 } from "../src/scene";
 import type { GalaxyRegionRequest, GalaxySource, System } from "../src/types";
 
 describe("galaxy presentation and interaction regressions", () => {
+  it("keeps local stellar points pronounced while preserving solar-radius ordering", () => {
+    const brownDwarf = orbScale(0.1 * 695_700_000);
+    const sol = orbScale(695_700_000);
+    const giant = orbScale(25 * 695_700_000);
+
+    expect(brownDwarf).toBeGreaterThanOrEqual(72);
+    expect(brownDwarf).toBeLessThan(sol);
+    expect(sol).toBeLessThan(giant);
+    expect(minimumOrbDiameter(60, 0.75, true)).toBeGreaterThanOrEqual(6);
+  });
+
+  it("translates camera and target together when selecting without changing orientation", () => {
+    const camera = { x: 40, y: -30, z: 80 };
+    const currentTarget = { x: 10, y: 5, z: 15 };
+    const selected = { x: -400, y: 22, z: 900 };
+    const nextCamera = translatedCameraPosition(camera, currentTarget, selected);
+
+    expect(nextCamera).toEqual({ x: -370, y: -13, z: 965 });
+    expect(nextCamera.x - selected.x).toBe(camera.x - currentTarget.x);
+    expect(nextCamera.y - selected.y).toBe(camera.y - currentTarget.y);
+    expect(nextCamera.z - selected.z).toBe(camera.z - currentTarget.z);
+  });
+
+  it("limits System name labels to the selected 10 ly cell and its adjacent shell", () => {
+    const system = (name: string, x: number, y: number, z: number): System => ({
+      name,
+      coords: { x, y, z },
+    });
+    const systems = [
+      system("center", 1, 1, 1),
+      system("adjacent", 14.9, -14.9, 14.9),
+      system("outside", 15.1, 0, 0),
+      system("placeholder", 2, 2, 2),
+    ];
+    systems[3]!.name = "ID64 123";
+
+    expect(localNameLabelIndexes(systems, { x: 0, y: 0, z: 0 })).toEqual([
+      0,
+      1,
+    ]);
+  });
+
+  it("keeps local name labels bound to stable Systems when resident order changes", () => {
+    const sol: System = { name: "Sol", coords: { x: 0, y: 0, z: 0 } };
+    const neighbor: System = {
+      name: "Alpha Centauri",
+      coords: { x: 3.031, y: -0.093, z: 3.156 },
+    };
+    const systems = [sol, neighbor];
+    const labels = localNameLabelSystems(systems, sol.coords);
+
+    systems.reverse();
+
+    expect(labels[0]).toBe(sol);
+    expect(labels[0]!.coords).toEqual({ x: 0, y: 0, z: 0 });
+  });
+
+  it("shows local System names only after entering the close map view", () => {
+    expect(localSystemNamesVisible(81)).toBe(false);
+    expect(localSystemNamesVisible(80)).toBe(true);
+    expect(localSystemNamesVisible(20)).toBe(true);
+  });
+
   it("derives a bounded realistic brightness from factual stellar luminosity", () => {
     expect(stellarLuminositySolar(695_700_000, 5_772)).toBeCloseTo(1, 6);
     expect(stellarLuminositySolar(undefined, undefined, 4.83)).toBeCloseTo(1, 6);
@@ -50,9 +119,41 @@ describe("galaxy presentation and interaction regressions", () => {
       { x: 0, y: 0, z: 0, r: 90, brightness: 1.4 },
       { x: 1, y: 0, z: 0, r: 90 },
     ], new Color(0xffffff), { maxPx: 12 });
-    const brightness = cloud.geometry.getAttribute("instanceBrightness");
-    expect(brightness.getX(0)).toBeCloseTo(1.4);
-    expect(brightness.getX(1)).toBe(1);
+    const presentation = cloud.geometry.getAttribute("instancePresentation");
+    expect(presentation.itemSize).toBe(4);
+    expect(presentation.getW(0)).toBeCloseTo(1.4);
+    expect(presentation.getW(1)).toBe(1);
+    cloud.geometry.dispose();
+  });
+
+  it("packs orb presentation state below the WebGPU vertex-buffer limit", () => {
+    const cloud = orbCloud(
+      [{
+        x: 0,
+        y: 0,
+        z: 0,
+        r: 110,
+        visibility: 0.7,
+        opacityNoise: 0.4,
+        detail: true,
+        selected: true,
+        focused: true,
+        brightness: 1.2,
+      }],
+      new Color(0xffffff),
+      { maxPx: 12, soft: true },
+    );
+    const presentation = cloud.geometry.getAttribute("instancePresentation");
+    const state = cloud.geometry.getAttribute("instanceState");
+
+    expect(presentation.itemSize).toBe(4);
+    expect(presentation.getX(0)).toBe(110);
+    expect(presentation.getY(0)).toBeCloseTo(0.7);
+    expect(presentation.getZ(0)).toBeCloseTo(0.4);
+    expect(presentation.getW(0)).toBeCloseTo(1.2);
+    expect(state.itemSize).toBe(4);
+    expect([state.getX(0), state.getY(0), state.getZ(0)]).toEqual([1, 1, 1]);
+    expect(cloud.geometry.getAttribute("instanceDetail")).toBeUndefined();
     cloud.geometry.dispose();
   });
 
@@ -127,6 +228,13 @@ describe("galaxy presentation and interaction regressions", () => {
     ).toBe(1);
   });
 
+  it("composes soft-disc falloff with the per-star opacity mask", () => {
+    expect(softDiscAlpha(0, 0)).toBe(0);
+    expect(softDiscAlpha(0, 0.25)).toBeCloseTo(0.2375);
+    expect(softDiscAlpha(0.75, 1)).toBeGreaterThan(0);
+    expect(softDiscAlpha(1, 1)).toBe(0);
+  });
+
   it("grows selected and connected orbs only past 85% zoom with camera-depth perspective", () => {
     expect(focusedOrbDiameterCap(100, 100, true)).toBe(12);
     expect(focusedOrbDiameterCap(58, 58, true)).toBeGreaterThan(12);
@@ -136,7 +244,8 @@ describe("galaxy presentation and interaction regressions", () => {
     expect(focusedOrbDiameterCap(58, 80, true)).toBeLessThan(
       focusedOrbDiameterCap(58, 58, true),
     );
-    expect(focusedOrbDiameterCap(20, 20, true)).toBeLessThanOrEqual(19);
+    expect(focusedOrbDiameterCap(20, 20, true)).toBeGreaterThan(40);
+    expect(focusedOrbDiameterCap(20, 20, true)).toBeLessThanOrEqual(53);
     expect(focusedOrbDiameterCap(20, 20, false)).toBe(12);
   });
 
@@ -215,8 +324,10 @@ describe("galaxy presentation and interaction regressions", () => {
     expect(representedSystemsPerOverviewPoint(50_000)).toBe(8_000_000);
     expect(densityFieldOpacity(100_000)).toBeGreaterThan(0.9);
     expect(densityFieldOpacity(8_000)).toBeGreaterThan(0.7);
-    expect(densityFieldOpacity(180)).toBe(0);
-    expect(densityFieldOpacity(50)).toBe(0);
+    expect(densityFieldOpacity(1_600)).toBe(1);
+    expect(densityFieldOpacity(300)).toBeGreaterThan(0);
+    expect(densityFieldOpacity(20)).toBe(1);
+    expect(densityFieldOpacity(0)).toBe(0);
   });
 
   it("colors aggregate density from a cool core into a varied warm outer disk", () => {
@@ -459,7 +570,12 @@ describe("galaxy presentation and interaction regressions", () => {
     expect(html).toContain("Right-drag grabs and pans X/Z");
     expect(html).toContain("<span>zoom</span>");
     expect(html).toContain('id="zoom-percent"');
-    expect(html).toMatch(/<option value="h" selected>h · 1280 ly<\/option>/);
+    expect(html).toMatch(/<label>Grid size\s*<select id="grid-size"/);
+    expect(html).toMatch(/<option value="h" selected>1280 ly<\/option>/);
+    expect(html).toMatch(/<label>Mass code\s*<select id="masscode-filter"/);
+    expect(html).toContain('<option value="all" selected>All</option>');
+    expect(html).toContain('id="masscode-children"');
+    expect(html).toContain("show child boxels");
     expect(html).not.toMatch(/id="grid"[^>]+checked/);
     expect(html).not.toMatch(/id="regions"[^>]+checked/);
     expect(html).not.toContain('optgroup label="Generation"');

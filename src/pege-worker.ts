@@ -6,16 +6,19 @@ import {
   enumerateGalaxyBoxels,
   estimateGalaxyViewTilePopulation,
   galaxyViewTileKeyString,
-  packGalaxyBoxelWithStellarAttributes,
+  packGalaxyBoxel,
+  packGalaxyBoxelSelection,
   recommendGalaxyViewTileTargets,
+  streamPackedGalaxyDensityTilesAsync,
   streamPackedGalaxyTilesAsync,
   streamPackedGalaxyViewAsync,
-  streamPackedGalaxyRegionAsync,
   type GalaxyEngineDataset,
+  type PackedGalaxyDensityTile,
   type StellarComponent,
 } from "pege";
 import type {
   PackedSystemBatch,
+  PackedDensityBatch,
   PegeWorkerRequest,
   PegeWorkerResponse,
   ResolvedPegeSystem,
@@ -43,11 +46,6 @@ const PEGE_QUERY_CACHE_MAX_BYTES = 16 * 1024 * 1024;
 const PEGE_QUERY_CACHE_TRIM_BYTES = 8 * 1024 * 1024;
 const PEGE_STREAM_CHUNK_BYTES = 4 * 1024 * 1024;
 const PEGE_OVERVIEW_CHUNK_BYTES = 256 * 1024;
-const PRIMARY_RENDER_BYTES_PER_SYSTEM =
-  GALAXY_SYSTEM_STRIDE_BYTES +
-  STELLAR_SYSTEM_ATTRIBUTE_STRIDE_BYTES +
-  Float32Array.BYTES_PER_ELEMENT;
-
 function createEngine(dataset: GalaxyEngineDataset): Pege {
   const queryWorker = workerRole === "query";
   return new Pege(dataset, {
@@ -123,6 +121,10 @@ function packedBatchTransfers(batch: PackedSystemBatch): Transferable[] {
   if (batch.stellarRecords) transfers.push(batch.stellarRecords);
   if (batch.stellarRadii) transfers.push(batch.stellarRadii);
   return transfers;
+}
+
+function packedDensityTransfers(batch: PackedDensityBatch): Transferable[] {
+  return [batch.centroidFixedXyz, batch.voxelSystemCounts];
 }
 
 type PackedDisplayNameResolver = {
@@ -284,6 +286,27 @@ export function thinPackedBatch(
 ): PackedSystemBatch {
   // PEGE yields complete intersecting boxels. Clip their records to the exact
   // request before transferring or expanding them into main-thread objects.
+  const kept = retainedPackedRecordIndices(
+    records,
+    threshold,
+    minimumFixedXyz,
+    maximumExclusiveFixedXyz,
+  );
+  return selectPackedRecords(
+    records,
+    names,
+    kept,
+    stellarRecords,
+    stellarRadii,
+  );
+}
+
+function retainedPackedRecordIndices(
+  records: ArrayBuffer,
+  threshold: number,
+  minimumFixedXyz?: readonly [number, number, number],
+  maximumExclusiveFixedXyz?: readonly [number, number, number],
+): number[] {
   const source = new DataView(records);
   const sourceCount = records.byteLength / GALAXY_SYSTEM_STRIDE_BYTES;
   const kept: number[] = [];
@@ -308,13 +331,47 @@ export function thinPackedBatch(
     const high = source.getUint32(offset + 4, true);
     if (threshold >= 1 || lodScore(low, high) < threshold) kept.push(index);
   }
-  return selectPackedRecords(
-    records,
-    names,
-    kept,
-    stellarRecords,
-    stellarRadii,
+  return kept;
+}
+
+export function packFilteredGalaxyBoxel(
+  pege: Pege,
+  boxel: ReturnType<Pege["generateBoxel"]>,
+  threshold: number,
+  minimumFixedXyz: readonly [number, number, number],
+  maximumExclusiveFixedXyz: readonly [number, number, number],
+): PackedSystemBatch {
+  // Local requests usually intersect only a small portion of a populous
+  // source boxel. Resolve expensive stellar profiles only for records that
+  // survive exact clipping and LOD selection.
+  const unpackedSpatial = packGalaxyBoxel(boxel);
+  const kept = retainedPackedRecordIndices(
+    unpackedSpatial.records,
+    threshold,
+    minimumFixedXyz,
+    maximumExclusiveFixedXyz,
   );
+  const spatial = packGalaxyBoxelSelection(boxel, kept);
+  const stellar = pege.packBoxelStellarAttributesSelection(boxel, kept);
+  return {
+    records: spatial.records,
+    names: spatial.names,
+    stellarRecords: stellar.records,
+    stellarRadii: stellar.radii,
+  };
+}
+
+export function prioritizeLocalBoxelAddresses(
+  addresses: readonly bigint[],
+): bigint[] {
+  // Higher mass-code boxels cover the center with far fewer generation calls
+  // and usually contain the first visible residents. This changes only stream
+  // order; every enumerated boxel is still processed exactly once.
+  return [...addresses].sort((left, right) => {
+    const massDifference = Number(right & 7n) - Number(left & 7n);
+    if (massDifference !== 0) return massDifference;
+    return left < right ? -1 : left > right ? 1 : 0;
+  });
 }
 
 function toResolvedSystem(
@@ -461,9 +518,17 @@ function resolvedComponent(
       rings: component.rings.map((ring) => ({ ...ring })),
     }),
     ...(component.displayColor === undefined ? {} : {
+      displayColor: {
+        srgb: [...component.displayColor.srgb] as [number, number, number],
+        source: component.displayColor.source,
+      },
       stellarColor: srgbHex(component.displayColor.srgb),
     }),
+    provenance: component.provenance,
     validation,
+    ...(component.attributeValidation === undefined ? {} : {
+      attributeValidation: { ...component.attributeValidation },
+    }),
     stellarValidation: {
       starType: component.attributeValidation?.starType ?? validation,
       ...(component.stellarMassSolar === undefined ? {} : {
@@ -549,10 +614,13 @@ async function generate(request: Extract<PegeWorkerRequest, { type: "generate" }
     let queuedBytes = 0;
     const flush = () => {
       if (queuedBytes === 0) return;
-      const batch = populatePackedDisplayNames(
-        pege as unknown as PackedDisplayNameResolver,
-        combinePackedBatches(queued),
-      );
+      const combined = combinePackedBatches(queued);
+      const batch = request.includeNames
+        ? populatePackedDisplayNames(
+            pege as unknown as PackedDisplayNameResolver,
+            combined,
+          )
+        : combined;
       respond(
         { type: "batch", requestId: request.requestId, batch },
         [
@@ -594,6 +662,8 @@ async function generate(request: Extract<PegeWorkerRequest, { type: "generate" }
       queuedBytes += batchBytes;
       if (queuedBytes >= PEGE_STREAM_CHUNK_BYTES) flush();
     };
+    let boxelAddresses: bigint[];
+    let systemThreshold = request.threshold;
     if (request.maximumBoxels !== undefined) {
       let boxelCount = 0;
       for (const _address of enumerateGalaxyBoxels(region)) boxelCount += 1;
@@ -612,74 +682,49 @@ async function generate(request: Extract<PegeWorkerRequest, { type: "generate" }
       }
       selected.sort((a, b) => a.score - b.score);
       selected.length = Math.min(selected.length, request.maximumBoxels);
-      respond({
-        type: "progress",
-        requestId: request.requestId,
-        phase: "detail",
-        completed: 0,
-        total: selected.length,
-      });
       const actualPlan = boundedLocalSamplePlan(
         boxelCount,
         Math.max(1, selected.length),
         request.threshold,
       );
-      const yieldEvery = request.yieldEveryBoxels ?? 8;
-      for (let index = 0; index < selected.length; index += 1) {
-        if (controller.signal.aborted) throw controller.signal.reason;
-        const boxel = pege.generateBoxel(selected[index]!.address);
-        const maximumSystemsPerChunk = Math.floor(
-          PEGE_STREAM_CHUNK_BYTES / PRIMARY_RENDER_BYTES_PER_SYSTEM,
-        );
-        for (
-          let startSystemIndex = 0;
-          startSystemIndex < boxel.systems.length;
-          startSystemIndex += maximumSystemsPerChunk
-        ) {
-          if (controller.signal.aborted) throw controller.signal.reason;
-          append(
-            packGalaxyBoxelWithStellarAttributes(
-              pege,
-              boxel,
-              startSystemIndex,
-              Math.min(
-                boxel.systems.length,
-                startSystemIndex + maximumSystemsPerChunk,
-              ),
-            ),
-            actualPlan.systemThreshold,
-          );
-        }
-        respond({
-          type: "progress",
-          requestId: request.requestId,
-          phase: "detail",
-          completed: index + 1,
-          total: selected.length,
-        });
-        if ((index + 1) % yieldEvery === 0) {
-          await new Promise<void>((resolve) => setTimeout(resolve, 0));
-        }
-      }
+      boxelAddresses = selected.map(({ address }) => address);
+      systemThreshold = actualPlan.systemThreshold;
     } else {
+      boxelAddresses = prioritizeLocalBoxelAddresses([
+        ...enumerateGalaxyBoxels(region),
+      ]);
+    }
+    respond({
+      type: "progress",
+      requestId: request.requestId,
+      phase: "detail",
+      completed: 0,
+      total: boxelAddresses.length,
+    });
+    const yieldEvery = request.yieldEveryBoxels ?? 8;
+    for (const [index, address] of boxelAddresses.entries()) {
+      if (controller.signal.aborted) throw controller.signal.reason;
+      const boxel = pege.generateBoxel(address);
+      append(
+        packFilteredGalaxyBoxel(
+          pege,
+          boxel,
+          systemThreshold,
+          request.minimumFixedXyz,
+          request.maximumExclusiveFixedXyz,
+        ),
+        1,
+      );
       respond({
         type: "progress",
         requestId: request.requestId,
         phase: "detail",
-        completed: 0,
-        total: 1,
+        completed: index + 1,
+        total: boxelAddresses.length,
       });
-      for await (const tile of streamPackedGalaxyRegionAsync(
-        pege,
-        region,
-        {
-          signal: controller.signal,
-          yieldEveryBoxels: request.yieldEveryBoxels ?? 8,
-          attributes: "spatial-primary-render",
-          maxChunkBytes: PEGE_STREAM_CHUNK_BYTES,
-        },
-      )) {
-        append(tile, request.threshold);
+      if ((index + 1) % yieldEvery === 0) {
+        flush();
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
       }
     }
     flush();
@@ -711,12 +756,13 @@ async function overview(request: Extract<PegeWorkerRequest, { type: "overview" }
   active.set(request.requestId, controller);
   try {
     const pege = await engine(request.requestId);
+    const progressTotal = request.maximumBoxelsVisited ?? request.targetSystems;
     respond({
       type: "progress",
       requestId: request.requestId,
       phase: "overview",
       completed: 0,
-      total: request.targetSystems,
+      total: progressTotal,
     });
     if (!controller.signal.aborted) {
       for await (const chunk of streamPackedGalaxyViewAsync(
@@ -725,6 +771,8 @@ async function overview(request: Extract<PegeWorkerRequest, { type: "overview" }
           minimumFixedXyz: request.minimumFixedXyz,
           maximumExclusiveFixedXyz: request.maximumExclusiveFixedXyz,
           targetSystems: request.targetSystems,
+          ...(request.massCodes === undefined ? {} : { massCodes: request.massCodes }),
+          maximumBoxelsVisited: request.maximumBoxelsVisited,
           selectionSeed: BigInt(request.selectionSeed),
           attributes: "spatial-primary-render",
           stellarLod: request.stellarLod,
@@ -733,17 +781,31 @@ async function overview(request: Extract<PegeWorkerRequest, { type: "overview" }
           signal: controller.signal,
           maxChunkBytes: PEGE_OVERVIEW_CHUNK_BYTES,
           yieldEveryBoxels: 8,
+          onProgress(sample) {
+            respond({
+              type: "progress",
+              requestId: request.requestId,
+              phase: "overview",
+              completed: request.maximumBoxelsVisited === undefined
+                ? sample.selectedByMassCode.reduce((sum, count) => sum + count, 0)
+                : sample.boxelsVisited,
+              total: progressTotal,
+            });
+          },
         },
       )) {
-        const batch = populatePackedDisplayNames(
-          pege as unknown as PackedDisplayNameResolver,
-          {
+        const unnamedBatch = {
             records: chunk.records,
             names: chunk.names,
             stellarRecords: chunk.stellarRecords,
             stellarRadii: chunk.stellarRadii,
-          },
-        );
+          };
+        const batch = request.includeNames
+          ? populatePackedDisplayNames(
+              pege as unknown as PackedDisplayNameResolver,
+              unnamedBatch,
+            )
+          : unnamedBatch;
         respond(
           {
             type: "batch",
@@ -752,13 +814,6 @@ async function overview(request: Extract<PegeWorkerRequest, { type: "overview" }
           },
           packedBatchTransfers(batch),
         );
-        respond({
-          type: "progress",
-          requestId: request.requestId,
-          phase: "overview",
-          completed: chunk.sample.selectionOffset + chunk.systemCount,
-          total: request.targetSystems,
-        });
       }
     }
 
@@ -794,6 +849,13 @@ async function planTiles(
   try {
     const pege = await engine(request.requestId);
     const estimates = [];
+    respond({
+      type: "progress",
+      requestId: request.requestId,
+      phase: "detail",
+      completed: 0,
+      total: Math.max(1, request.keys.length),
+    });
     for (let index = 0; index < request.keys.length; index += 1) {
       if (controller.signal.aborted) break;
       const estimate = estimateGalaxyViewTilePopulation(pege, request.keys[index]!);
@@ -801,6 +863,13 @@ async function planTiles(
       estimates.push({
         ...estimate,
         populationWeight: estimate.populationWeight * Math.max(0, weight),
+      });
+      respond({
+        type: "progress",
+        requestId: request.requestId,
+        phase: "detail",
+        completed: index + 1,
+        total: request.keys.length,
       });
       if ((index + 1) % 8 === 0) {
         await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -842,8 +911,16 @@ async function generateTiles(
   active.set(request.requestId, controller);
   try {
     const pege = await engine(request.requestId);
+    const reportsBoxelWork = request.tiles.length > 0 && request.tiles.every(
+      (tile) => tile.maximumBoxelsVisited !== undefined,
+    );
     const total = request.tiles.reduce(
-      (sum, tile) => sum + Math.max(0, tile.targetSystems),
+      (sum, tile) => sum + Math.max(
+        0,
+        reportsBoxelWork
+          ? tile.maximumBoxelsVisited!
+          : tile.targetSystems,
+      ),
       0,
     );
     const completedByTile = new Map<string, number>();
@@ -854,12 +931,146 @@ async function generateTiles(
       completed: 0,
       total,
     });
+    const aggregateShells = request.tiles.some(
+      (tile) => tile.sampleTargetSystems !== undefined,
+    );
+    if (aggregateShells) {
+      let completed = 0;
+      const densityRequests = request.tiles.map((entry) => ({
+            key: entry.key,
+            sourceTargetSystems: entry.targetSystems,
+            sampleTargetSystems: Math.min(
+              entry.targetSystems,
+              entry.sampleTargetSystems ?? entry.targetSystems,
+            ),
+            voxelResolution: entry.voxelResolution ?? 4,
+            ...(entry.maximumBoxelsVisited === undefined
+              ? {}
+              : { maximumBoxelsVisited: entry.maximumBoxelsVisited }),
+      }));
+      const publishDensityTile = (tile: PackedGalaxyDensityTile) => {
+        const batch = request.includeNames
+          ? populatePackedDisplayNames(
+              pege as unknown as PackedDisplayNameResolver,
+              tile.genuineSample,
+            )
+          : tile.genuineSample;
+        respond(
+          {
+            type: "tile-batch",
+            requestId: request.requestId,
+            tileKey: tile.tileKey,
+            tileKeyString: tile.tileKeyString,
+            selectionOffset: 0,
+            batch,
+          },
+          packedBatchTransfers(batch),
+        );
+        const density: PackedDensityBatch = {
+          densityVersion: tile.densityVersion,
+          voxelResolution: tile.voxelResolution,
+          sourceSystemCount: tile.sourceSystemCount,
+          centroidFixedXyz: tile.centroidFixedXyz,
+          voxelSystemCounts: tile.voxelSystemCounts,
+        };
+        respond(
+          {
+            type: "tile-density",
+            requestId: request.requestId,
+            tileKey: tile.tileKey,
+            tileKeyString: tile.tileKeyString,
+            density,
+          },
+          packedDensityTransfers(density),
+        );
+      };
+      if (reportsBoxelWork) {
+        for (const densityRequest of densityRequests) {
+          const maximumBoxelsVisited = densityRequest.maximumBoxelsVisited!;
+          for await (const tile of streamPackedGalaxyDensityTilesAsync(
+            pege,
+            {
+              tiles: [densityRequest],
+              ...(request.massCodes === undefined ? {} : { massCodes: request.massCodes }),
+              selectionSeed: BigInt(request.selectionSeed),
+              attributes: request.attributes,
+              stellarLod: request.stellarLod,
+            },
+            {
+              signal: controller.signal,
+              maxChunkBytes: PEGE_STREAM_CHUNK_BYTES,
+              yieldEveryBoxels: 8,
+              onProgress(sample) {
+                respond({
+                  type: "progress",
+                  requestId: request.requestId,
+                  phase: "detail",
+                  completed: Math.min(
+                    total,
+                    completed + Math.min(maximumBoxelsVisited, sample.boxelsVisited),
+                  ),
+                  total,
+                });
+              },
+            },
+          )) publishDensityTile(tile);
+          completed += maximumBoxelsVisited;
+          respond({
+            type: "progress",
+            requestId: request.requestId,
+            phase: "detail",
+            completed: Math.min(total, completed),
+            total,
+          });
+        }
+      } else {
+        for await (const tile of streamPackedGalaxyDensityTilesAsync(
+          pege,
+          {
+            tiles: densityRequests,
+            ...(request.massCodes === undefined ? {} : { massCodes: request.massCodes }),
+            selectionSeed: BigInt(request.selectionSeed),
+            attributes: request.attributes,
+            stellarLod: request.stellarLod,
+          },
+          {
+            signal: controller.signal,
+            maxChunkBytes: PEGE_STREAM_CHUNK_BYTES,
+            yieldEveryBoxels: 8,
+          },
+        )) {
+          publishDensityTile(tile);
+          completed += tile.sourceSystemCount;
+          respond({
+            type: "progress",
+            requestId: request.requestId,
+            phase: "detail",
+            completed: Math.min(total, completed),
+            total,
+          });
+        }
+      }
+      if (controller.signal.aborted) {
+        respond({ type: "cancelled", requestId: request.requestId });
+      } else {
+        respond({
+          type: "progress",
+          requestId: request.requestId,
+          phase: "detail",
+          completed: 1,
+          total: 1,
+        });
+        respond({ type: "complete", requestId: request.requestId });
+      }
+      return;
+    }
     for await (const chunk of streamPackedGalaxyTilesAsync(
       pege,
       {
         tiles: request.tiles,
+        ...(request.massCodes === undefined ? {} : { massCodes: request.massCodes }),
         selectionSeed: BigInt(request.selectionSeed),
-        attributes: "spatial-primary-render",
+        attributes: request.attributes,
         stellarLod: request.stellarLod,
       },
       {
@@ -868,15 +1079,18 @@ async function generateTiles(
         yieldEveryBoxels: 8,
       },
     )) {
-      const batch = populatePackedDisplayNames(
-        pege as unknown as PackedDisplayNameResolver,
-        {
+      const unnamedBatch = {
           records: chunk.records,
           names: chunk.names,
           stellarRecords: chunk.stellarRecords,
           stellarRadii: chunk.stellarRadii,
-        },
-      );
+        };
+      const batch = request.includeNames
+        ? populatePackedDisplayNames(
+            pege as unknown as PackedDisplayNameResolver,
+            unnamedBatch,
+          )
+        : unnamedBatch;
       const target = request.tiles.find(
         (tile) => galaxyViewTileKeyString(tile.key) === chunk.tileKeyString,
       )?.targetSystems ?? 0;

@@ -150,7 +150,7 @@
       }
       #hud {
         position: fixed;
-        z-index: 4;
+        z-index: 6;
         top: 22px;
         left: 22px;
         right: 22px;
@@ -270,6 +270,20 @@
       }
       #hud #filter-options .filter-all {
         font-weight: 700;
+      }
+      #hud #filter-options #filter-apply {
+        position: sticky;
+        bottom: 0;
+        width: 100%;
+        margin-top: 10px;
+        border-color: var(--accent);
+        background: var(--accent);
+        color: var(--surface);
+        font-weight: 700;
+      }
+      #hud #filter-options #filter-apply:disabled {
+        opacity: 0.55;
+        cursor: default;
       }
       #hud input[type="search"] {
         width: 100%;
@@ -512,6 +526,55 @@
         padding-bottom: 14px;
         border-bottom: 1px solid var(--line);
       }
+      #panel .stellar-secondaries {
+        margin-top: 20px;
+        padding-top: 2px;
+        border-top: 1px solid var(--line);
+      }
+      #panel .stellar-secondary {
+        margin-top: 8px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: color-mix(in srgb, var(--control) 72%, transparent);
+        overflow: hidden;
+      }
+      #panel .stellar-secondary summary {
+        display: flex;
+        align-items: center;
+        justify-content: flex-start;
+        gap: 8px;
+        min-height: 42px;
+        box-sizing: border-box;
+        padding: 9px 12px;
+        color: var(--ink);
+        cursor: pointer;
+        list-style: none;
+      }
+      #panel .stellar-secondary summary::-webkit-details-marker {
+        display: none;
+      }
+      #panel .stellar-secondary summary::before {
+        content: "›";
+        color: var(--mute);
+        font: 700 18px/1 "Oxanium", sans-serif;
+        transform-origin: center;
+        transition: transform 0.16s ease;
+      }
+      #panel .stellar-secondary summary strong {
+        color: var(--accent);
+        font: 600 12px/1.25 "Oxanium", sans-serif;
+        letter-spacing: 0.04em;
+        white-space: nowrap;
+      }
+      #panel .stellar-secondary[open] summary {
+        border-bottom: 1px solid var(--line);
+      }
+      #panel .stellar-secondary[open] summary::before {
+        transform: rotate(90deg);
+      }
+      #panel .stellar-secondary .stellar-component {
+        padding: 12px;
+      }
       #panel button {
         background: var(--control);
         border: 1px solid var(--line);
@@ -737,20 +800,37 @@
         <div id="filter-options" aria-label="Primary star class filters"></div>
       </details>
       <span id="engine-status" role="status">PEGE loading</span>
-      <label>Boxel
-        <select id="masscode" title="Keep this boxel filter while zooming">
-          <option value="a">a · 10 ly</option>
-          <option value="b">b · 20 ly</option>
-          <option value="c">c · 40 ly</option>
-          <option value="d">d · 80 ly</option>
-          <option value="e">e · 160 ly</option>
-          <option value="f">f · 320 ly</option>
-          <option value="g">g · 640 ly</option>
-          <option value="h" selected>h · 1280 ly</option>
+      <label>Grid size
+        <select id="grid-size" title="Presentation-grid spacing; this does not filter Systems">
+          <option value="a">10 ly</option>
+          <option value="b">20 ly</option>
+          <option value="c">40 ly</option>
+          <option value="d">80 ly</option>
+          <option value="e">160 ly</option>
+          <option value="f">320 ly</option>
+          <option value="g">640 ly</option>
+          <option value="h" selected>1280 ly</option>
         </select>
+      </label>
+      <label>Mass code
+        <select id="masscode-filter" title="Filter Systems by their immutable ID64 mass code">
+          <option value="all" selected>All</option>
+          <option value="a">A</option>
+          <option value="b">B</option>
+          <option value="c">C</option>
+          <option value="d">D</option>
+          <option value="e">E</option>
+          <option value="f">F</option>
+          <option value="g">G</option>
+          <option value="h">H</option>
+        </select>
+      </label>
+      <label title="Include every smaller mass code below the selected code">
+        <input id="masscode-children" type="checkbox" disabled /> show child boxels
       </label>
       <label><input id="grid" type="checkbox" /> grid</label>
       <label><input id="regions" type="checkbox" /> regions</label>
+      <label><input id="names" type="checkbox" /> names</label>
     </div>
     <aside id="panel"></aside>
     <div id="height-rail">

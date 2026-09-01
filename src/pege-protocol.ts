@@ -6,12 +6,21 @@ import type {
   SystemLocationPreview,
   SystemSuggestion,
 } from "./types";
+import type { StellarLodPolicy } from "pege";
 
 export type PackedSystemBatch = {
   records: ArrayBuffer;
   names: readonly { systemIndex: number; name: string }[];
   stellarRecords?: ArrayBuffer;
   stellarRadii?: ArrayBuffer;
+};
+
+export type PackedDensityBatch = {
+  densityVersion: number;
+  voxelResolution: number;
+  sourceSystemCount: number;
+  centroidFixedXyz: ArrayBuffer;
+  voxelSystemCounts: ArrayBuffer;
 };
 
 export type PegeWorkerRequest =
@@ -31,6 +40,7 @@ export type PegeWorkerRequest =
       threshold: number;
       maximumBoxels?: number;
       yieldEveryBoxels?: number;
+      includeNames?: boolean;
     }
   | {
       type: "overview";
@@ -38,11 +48,11 @@ export type PegeWorkerRequest =
       minimumFixedXyz: readonly [number, number, number];
       maximumExclusiveFixedXyz: readonly [number, number, number];
       targetSystems: number;
+      massCodes?: readonly number[];
+      maximumBoxelsVisited?: number;
       selectionSeed: string;
-      stellarLod: {
-        mode: "presentation-balanced";
-        strength: number;
-      };
+      stellarLod: StellarLodPolicy;
+      includeNames?: boolean;
     }
   | {
       type: "plan-tiles";
@@ -54,15 +64,18 @@ export type PegeWorkerRequest =
   | {
       type: "tiles";
       requestId: number;
+      attributes: "spatial-primary-render" | "spatial-overview-estimate";
       tiles: readonly {
         key: PegeSpatialTileKey;
         targetSystems: number;
+        sampleTargetSystems?: number;
+        voxelResolution?: number;
+        maximumBoxelsVisited?: number;
       }[];
+      massCodes?: readonly number[];
       selectionSeed: string;
-      stellarLod: {
-        mode: "presentation-balanced";
-        strength: number;
-      };
+      stellarLod: StellarLodPolicy;
+      includeNames?: boolean;
     }
   | { type: "warm"; requestId: number }
   | { type: "cancel"; requestId: number }
@@ -86,7 +99,9 @@ export type ResolvedPegeSystem = {
   stellarMassSolar?: number;
   stellarTemperatureKelvin?: number;
   stellarLuminositySolar?: number;
-  stellarProfileSource?: "compiled-catalogue" | "procedural-primary-model";
+  stellarProfileSource?:
+    | "compiled-catalogue"
+    | "procedural-primary-model";
   stellarProfileValidation?: "exact" | "observed" | "estimated";
   stellarValidation?: {
     starType?: "exact" | "observed" | "estimated";
@@ -124,6 +139,13 @@ export type PegeWorkerResponse =
       tileKeyString: string;
       selectionOffset: number;
       batch: PackedSystemBatch;
+    }
+  | {
+      type: "tile-density";
+      requestId: number;
+      tileKey: PegeSpatialTileKey;
+      tileKeyString: string;
+      density: PackedDensityBatch;
     }
   | {
       type: "progress";

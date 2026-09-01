@@ -30,14 +30,18 @@ import {
   cameraResidencyCacheScope,
   pegeTileKeyString,
   pegeTilePointBudget,
-  radialMassCodeShellContains,
-  radialMassCodeShellPlan,
-  radialMassCodeShellTargets,
+  radialSpatialShellContains,
+  radialSpatialShellPlan,
+  radialSpatialShellTargets,
 } from "./pege-tiles";
 import {
   FULL_DETAIL_CAMERA_DISTANCE_LY,
   focusedResidencyRegion,
 } from "./lod";
+import {
+  filterOverviewDensityCells,
+  hasResidentReplacementCoverage,
+} from "./filter-overview-density";
 
 export type {
   ColorByMode,
@@ -71,13 +75,16 @@ export type Ed3dmMap = {
   setLod: (lod: LodSetting) => Promise<void>;
   focus: (coords: { x: number; y: number; z: number }) => Promise<void>;
   flyTo: (name: string) => Promise<System | undefined>;
-  setFilter: (filter: SystemFilter) => void;
+  setFilter: (filter: SystemFilter) => Promise<void>;
   setColorBy: (mode: ColorByMode) => void;
   setGrid: (on: boolean) => void;
   setRegionGrid: (on: boolean) => void;
+  setNames: (on: boolean) => void;
   setTheme: (theme: VisualTheme) => void;
   setPlaneHeight: (y: number) => void;
   planeHeight: () => number;
+  setGridSize: (code: MassCode) => void;
+  /** @deprecated Use setGridSize; this controls presentation spacing only. */
   setMassCode: (code: MassCode) => void;
   resetTopView: () => void;
   clearSelection: () => void;
@@ -134,6 +141,8 @@ export const ED3DM = {
     let sourceLocalSystems: System[] = [];
     let sourceSelectionSystems: System[] = [];
     let sourceSpatialTiles: GalaxySpatialTile[] = [];
+    let completedSpatialTiers = new Set<"h" | "g" | "f" | "e">();
+    let activeSpatialCompletionKey: string | undefined;
     let sourceOverviewRequest: AbortController | undefined;
     let sourceLocalRequest: AbortController | undefined;
     let sourceLocalRequestKey: string | undefined;
@@ -147,16 +156,19 @@ export const ED3DM = {
     let flyRevision = 0;
     let colorBy: ColorByMode = "none";
     let categoryFilter: string[] | undefined;
-    let generationFilter: System["generation"][] | undefined;
+    let generationFilter: GenerationKind[] | undefined;
     let stellarTypeFilter: string[] | undefined;
+    let massCodeFilter: number[] | undefined;
     let excludedStellarTypeFilter: string[] | undefined = ["RoguePlanet"];
     let showGrid = true;
     let showRegionGrid = true;
+    let showNames = false;
     let theme: VisualTheme = options.theme ?? "realistic";
     let themePaintTimer: ReturnType<typeof setTimeout> | undefined;
     let viewIdleTimer: ReturnType<typeof setTimeout> | undefined;
     let viewLoadRunning = false;
     let viewLoadQueued = false;
+    let activeDetailViewIdentity: string | undefined;
     let routes: Route[] = [];
     let searchIndex: Record<string, { x: number; y: number; z: number; tile?: string }> | null =
       null;
@@ -169,6 +181,16 @@ export const ED3DM = {
     function abortSourceDetailRequests() {
       sourceLocalRequest?.abort();
       sourceSpatialRequest?.abort();
+    }
+
+    function canonicalStellarFilter(types: readonly string[] | undefined): string {
+      return types?.length ? [...new Set(types)].sort().join(",") : "all";
+    }
+
+    function canonicalMassCodeFilter(codes: readonly number[] | undefined): string {
+      return codes?.length
+        ? [...new Set(codes)].sort((left, right) => left - right).join(",")
+        : "all";
     }
 
     async function ensureTile(cell: CatalogCell): Promise<System[]> {
@@ -245,12 +267,88 @@ export const ED3DM = {
       );
     }
 
-    async function ensureSourceLocal(): Promise<boolean> {
+    function detailViewRequestIdentity(): string | undefined {
+      if (!cameraView) return undefined;
+      if (cameraView.distanceLy >= LOCAL_DETAIL_MAX_DISTANCE_LY) return "far";
+      const anchor = detailResidencyAnchor();
+      if (!anchor) return undefined;
+      const roundedAnchor = [anchor.x, anchor.y, anchor.z]
+        .map((value) => Math.round(value / 10) * 10)
+        .join(":");
+      const zoomPercent = cameraZoomPercent(cameraView.distanceLy);
+      const shells = radialSpatialShellPlan(anchor);
+      const pointBudget = pegeTilePointBudget(
+        cameraView.distanceLy,
+        lod,
+        shells.reduce((sum, shell) => sum + shell.keys.length, 0),
+      );
+      return [
+        roundedAnchor,
+        Math.floor(zoomPercent / 5),
+        pointBudget,
+        lod,
+        canonicalStellarFilter(stellarTypeFilter),
+        canonicalMassCodeFilter(massCodeFilter),
+      ].join("|");
+    }
+
+    async function ensureSourceLocal(
+      exactPreview = false,
+      exhaustiveSelectedCore = false,
+    ): Promise<boolean> {
       if (!source) return false;
       const anchor = detailResidencyAnchor();
       if (!anchor) return false;
-      const residency = focusedResidencyRegion(anchor, cameraDistanceLy);
-      const requestKey = `region:${residency.key}:${lod}`;
+      // Use the same whole-percent boundary the UI displays. A camera value
+      // rendered as 70% must enter the 70% factual-detail policy.
+      const zoomPercent = Math.round(cameraZoomPercent(cameraDistanceLy));
+      const previewCenter = selected?.coords ?? {
+        x: Math.round(anchor.x / 10) * 10,
+        y: Math.round(anchor.y / 10) * 10,
+        z: Math.round(anchor.z / 10) * 10,
+      };
+      const previewSizes = exhaustiveSelectedCore
+        ? [10]
+        : zoomPercent >= 70
+          ? [10, 40, 160]
+          : zoomPercent >= 50
+            ? [10, 40]
+            : [10];
+      const residencies = exactPreview
+        ? previewSizes.map((size) => {
+            const half = size / 2;
+            return {
+              center: previewCenter,
+              radiusLy: half,
+              minimum: {
+                x: previewCenter.x - half,
+                y: previewCenter.y - half,
+                z: previewCenter.z - half,
+              },
+              maximum: {
+                x: previewCenter.x + half,
+                y: previewCenter.y + half,
+                z: previewCenter.z + half,
+              },
+              key: `${size}:${previewCenter.x}:${previewCenter.y}:${previewCenter.z}`,
+            };
+          })
+        : [focusedResidencyRegion(anchor, cameraDistanceLy)];
+      const residency = residencies.at(-1)!;
+      const requestDistanceLy = cameraDistanceLy;
+      const stellarFilterKey = canonicalStellarFilter(stellarTypeFilter);
+      const massFilterKey = canonicalMassCodeFilter(massCodeFilter);
+      const previewZoomBand = exactPreview
+        ? Math.floor(zoomPercent / 5)
+        : "fixed";
+      const requestKind = exhaustiveSelectedCore
+        ? "selected-core"
+        : exactPreview
+          ? "preview"
+          : "resident";
+      const boundedSpatialPreview = Boolean(source.loadSpatialTiles) &&
+        exactPreview && zoomPercent < 70;
+      const requestKey = `region:${requestKind}:${residency.key}:${previewZoomBand}:${lod}:${stellarFilterKey}:${massFilterKey}:${showNames ? "names" : "points"}`;
       if (requestKey === sourceLocalRequestKey) return false;
       if (requestKey === committedLocalRequestKey) {
         sourceLocalRequest?.abort();
@@ -258,29 +356,71 @@ export const ED3DM = {
       }
       sourceLocalRequest?.abort();
       const controller = new AbortController();
+      const partialSystems = new Map<string, System>();
       const activityRevision = ++detailActivityRevision;
       detailActivity += 1;
       sourceLocalRequest = controller;
       sourceLocalRequestKey = requestKey;
       try {
-        const systems = await source.loadRegion(
-          {
-            center: residency.center,
-            radiusLy: residency.radiusLy,
-            bounds: {
-              minimum: residency.minimum,
-              maximum: residency.maximum,
+        const localProgressEnd = source.loadSpatialTiles ? 0.08 : 1;
+        for (const [index, stage] of residencies.entries()) {
+          const partialSystems = new Map(
+            sourceLocalSystems.map((system) => [systemKey(system), system]),
+          );
+          const systems = await source.loadRegion(
+            {
+              center: stage.center,
+              radiusLy: stage.radiusLy,
+              bounds: {
+                minimum: stage.minimum,
+                maximum: stage.maximum,
+              },
+              // Every transitional preview is deliberately bounded so it can
+              // yield to the canonical H-area residency promptly. Once that
+              // residency is visible, the immediate 10 ly neighbourhood becomes
+              // exhaustive only in the 70%+ full-detail range. Running an
+              // unbounded core replay at lower zoom was able to pin the worker
+              // behind a misleading single-digit progress value.
+              cameraDistanceLy:
+                boundedSpatialPreview
+                  ? Math.max(requestDistanceLy, 500)
+                  : exhaustiveSelectedCore
+                  ? FULL_DETAIL_CAMERA_DISTANCE_LY
+                  : requestDistanceLy,
+              lod:
+                boundedSpatialPreview
+                  ? lod
+                  : exhaustiveSelectedCore
+                  ? "all"
+                  : lod,
+              ...(massCodeFilter?.length ? { massCodes: massCodeFilter } : {}),
+              ...(stellarTypeFilter?.length
+                ? { stellarTypes: stellarTypeFilter }
+                : {}),
+              detailProgressRange: {
+                start: (localProgressEnd * index) / residencies.length,
+                end: (localProgressEnd * (index + 1)) / residencies.length,
+              },
+              includeNames: showNames,
+              ...(exactPreview
+                ? {
+                    onPartialSystems: (batch: readonly System[]) => {
+                      if (controller.signal.aborted) return;
+                      for (const system of batch) {
+                        partialSystems.set(systemKey(system), system);
+                      }
+                      sourceLocalSystems = [...partialSystems.values()];
+                      paint();
+                    },
+                  }
+                : {}),
             },
-            cameraDistanceLy,
-            lod,
-            detailProgressRange: source.loadSpatialTiles
-              ? { start: 0, end: 0.35 }
-              : { start: 0, end: 1 },
-          },
-          controller.signal,
-        );
-        if (controller.signal.aborted) return false;
-        sourceLocalSystems = systems;
+            controller.signal,
+          );
+          if (controller.signal.aborted) return false;
+          sourceLocalSystems = systems;
+          paint();
+        }
         committedLocalRequestKey = requestKey;
         return true;
       } catch (error) {
@@ -302,17 +442,18 @@ export const ED3DM = {
       if (!source?.loadSpatialTiles) return false;
       const anchor = detailResidencyAnchor();
       if (!anchor) return false;
-      const fullDetail = cameraDistanceLy <= FULL_DETAIL_CAMERA_DISTANCE_LY;
-      const shells = radialMassCodeShellPlan(anchor);
-      const cacheScope = cameraResidencyCacheScope(anchor);
+      const shells = radialSpatialShellPlan(anchor);
+      const stellarFilterKey = canonicalStellarFilter(stellarTypeFilter);
+      const massFilterKey = canonicalMassCodeFilter(massCodeFilter);
+      const cacheScope = `${cameraResidencyCacheScope(anchor)}:${stellarFilterKey}:${massFilterKey}`;
       const totalTargetSystems = pegeTilePointBudget(
         cameraDistanceLy,
         lod,
         shells.reduce((sum, shell) => sum + shell.keys.length, 0),
       );
       if (totalTargetSystems === 0) return false;
-      const shellTargets = radialMassCodeShellTargets(shells, totalTargetSystems);
-      const requestKey = `tiles:${shells
+      const shellTargets = radialSpatialShellTargets(shells, totalTargetSystems);
+      const requestKey = `tiles:${stellarFilterKey}:${massFilterKey}:${showNames ? "names" : "points"}:${shells
         .map((shell, index) => {
           const { minimum, maximum } = shell.outerBounds;
           const bounds = [
@@ -330,6 +471,8 @@ export const ED3DM = {
       if (requestKey === sourceSpatialRequestKey) return false;
       if (requestKey === committedSpatialRequestKey) {
         sourceSpatialRequest?.abort();
+        activeSpatialCompletionKey = requestKey;
+        completedSpatialTiers = new Set(["h", "g", "f", "e"]);
         return true;
       }
       sourceSpatialRequest?.abort();
@@ -338,38 +481,77 @@ export const ED3DM = {
       detailActivity += 1;
       sourceSpatialRequest = controller;
       sourceSpatialRequestKey = requestKey;
+      activeSpatialCompletionKey = requestKey;
+      completedSpatialTiers = new Set();
       try {
         const previousSpatialTiles = sourceSpatialTiles;
         const progressiveTiles: GalaxySpatialTile[] = [];
-        const spatialStart = fullDetail ? 0.35 : 0;
+        const spatialStart = 0.08;
         for (const [index, shell] of shells.entries()) {
           const shellStart =
             spatialStart + ((1 - spatialStart) * index) / shells.length;
           const shellEnd =
             spatialStart + ((1 - spatialStart) * (index + 1)) / shells.length;
-          const tiles = await source.loadSpatialTiles(
-            {
-              keys: shell.keys,
-              totalTargetSystems: shellTargets[index]!,
-              cacheScope,
-              detailProgressRange: { start: shellStart, end: shellEnd },
-            },
-            controller.signal,
-          );
-          if (controller.signal.aborted) return false;
-          const clippedTiles = tiles.map((tile) => ({
+          const clipTiles = (tiles: readonly GalaxySpatialTile[]) => tiles.map((tile) => ({
             ...tile,
             key: `${tile.key}@${shell.tier}`,
             systems: tile.systems.filter(({ coords }) =>
-              radialMassCodeShellContains(shell, coords),
+              radialSpatialShellContains(shell, coords),
+            ),
+            densityCells: tile.densityCells?.filter(({ coords }) =>
+              radialSpatialShellContains(shell, coords),
             ),
           }));
-          progressiveTiles.push(...clippedTiles);
-          sourceSpatialTiles = mergeSpatialTiles(
-            previousSpatialTiles,
-            progressiveTiles,
-          );
-          paint();
+          const fullTarget = shellTargets[index]!;
+          let completedShellTiles: GalaxySpatialTile[] = [];
+          const targets = shell.tier === "h" && fullTarget > 64
+            ? [Math.max(shell.keys.length, 64), fullTarget]
+            : [fullTarget];
+          for (const [phaseIndex, targetSystems] of targets.entries()) {
+            const phaseStart =
+              shellStart +
+              ((shellEnd - shellStart) * phaseIndex) / targets.length;
+            const phaseEnd =
+              shellStart +
+              ((shellEnd - shellStart) * (phaseIndex + 1)) / targets.length;
+            const tiles = await source.loadSpatialTiles(
+              {
+                keys: shell.keys,
+                totalTargetSystems: targetSystems,
+                ...(massCodeFilter?.length ? { massCodes: massCodeFilter } : {}),
+                ...(stellarTypeFilter?.length
+                  ? { stellarTypes: stellarTypeFilter }
+                  : {}),
+                cacheScope,
+                detailProgressRange: { start: phaseStart, end: phaseEnd },
+                includeNames: showNames,
+                onPartialTiles: (partialTiles) => {
+                  if (controller.signal.aborted) return;
+                  sourceSpatialTiles = mergeSpatialTiles(
+                    previousSpatialTiles,
+                    progressiveTiles,
+                    clipTiles(partialTiles),
+                  );
+                  paint();
+                },
+              },
+              controller.signal,
+            );
+            if (controller.signal.aborted) return false;
+            completedShellTiles = clipTiles(tiles);
+            progressiveTiles.push(...completedShellTiles);
+            sourceSpatialTiles = mergeSpatialTiles(
+              previousSpatialTiles,
+              progressiveTiles,
+            );
+            paint();
+          }
+          if (
+            activeSpatialCompletionKey === requestKey &&
+            hasResidentReplacementCoverage(completedShellTiles, fullTarget)
+          ) {
+            completedSpatialTiers.add(shell.tier);
+          }
         }
         sourceSpatialTiles = mergeSpatialTiles(progressiveTiles);
         committedSpatialRequestKey = requestKey;
@@ -391,6 +573,7 @@ export const ED3DM = {
     }
 
     async function applyLod(): Promise<void> {
+      activeDetailViewIdentity = detailViewRequestIdentity();
       if (source) {
         if (!focusAt) return;
 
@@ -398,6 +581,8 @@ export const ED3DM = {
           abortSourceDetailRequests();
           sourceLocalSystems = [];
           sourceSpatialTiles = [];
+          completedSpatialTiers = new Set();
+          activeSpatialCompletionKey = undefined;
           committedLocalRequestKey = undefined;
           committedSpatialRequestKey = undefined;
           paint();
@@ -405,23 +590,26 @@ export const ED3DM = {
         }
 
         // The selected System, or the camera focus on the current height plane,
-        // anchors one complete 3D h/g/f/e residency stack. Each spatial tier
+        // anchors one complete 3D H/G/F/E residency stack. Each spatial tier
         // is published as a coherent shell around that exact focus.
-        if (cameraDistanceLy <= FULL_DETAIL_CAMERA_DISTANCE_LY) {
-          if (await ensureSourceLocal()) paint();
-          if (await ensureSourceSpatial()) paint();
-          return;
-        }
-
         if (source.loadSpatialTiles) {
+          // The canonical residency publishes factual H-area tile batches as
+          // they stream. Do not block it behind a redundant fine-boxel region
+          // replay; that bridge can take longer than the residency itself.
           if (await ensureSourceSpatial()) {
             sourceLocalSystems = [];
             committedLocalRequestKey = undefined;
             paint();
           }
+          if (
+            selected &&
+            Math.round(cameraZoomPercent(cameraDistanceLy)) >= 70
+          ) {
+            await ensureSourceLocal(true, true);
+          }
           return;
         }
-        await ensureSourceLocal();
+        await ensureSourceLocal(Boolean(selected), Boolean(selected));
         return;
       }
       const keep = wantedUrls();
@@ -447,7 +635,8 @@ export const ED3DM = {
       revision: number,
     ): Promise<boolean> {
       if (!source) return false;
-      const requestKey = systemKey(system);
+      const selectedKey = systemKey(system);
+      const requestKey = `${selectedKey}:${canonicalMassCodeFilter(massCodeFilter)}`;
       if (committedSelectionRequestKey === requestKey) return true;
       sourceSelectionRequest?.abort();
       const controller = new AbortController();
@@ -475,14 +664,16 @@ export const ED3DM = {
               },
               cameraDistanceLy: Math.min(50, FULL_DETAIL_CAMERA_DISTANCE_LY),
               lod: "all",
+              ...(massCodeFilter?.length ? { massCodes: massCodeFilter } : {}),
               detailProgressRange: { start: 0, end: 1 },
+              suppressProgress: true,
             },
             controller.signal,
           );
           if (
             controller.signal.aborted ||
             revision !== flyRevision ||
-            systemKey(selected ?? system) !== requestKey
+            systemKey(selected ?? system) !== selectedKey
           ) return false;
           const neighbors = selectionNeighborCandidates(loaded, system);
           sourceSelectionSystems = [system, ...neighbors];
@@ -512,14 +703,31 @@ export const ED3DM = {
       committedSelectionRequestKey = undefined;
     }
 
-    if (source?.loadOverview) {
+    async function reloadSourceOverview(
+      requestedStellarTypes: readonly string[] | undefined,
+    ): Promise<void> {
+      if (!source?.loadOverview) return;
+      sourceOverviewRequest?.abort();
       sourceOverviewRequest = new AbortController();
-      const loadedOverview = await source.loadOverview(
-        { lod },
-        sourceOverviewRequest.signal,
-      );
-      sourceOverviewSystems = loadedOverview.systems;
+      const controller = sourceOverviewRequest;
+      try {
+        const loadedOverview = await source.loadOverview(
+          {
+            lod,
+            ...(requestedStellarTypes?.length
+              ? { stellarTypes: [...requestedStellarTypes] }
+              : {}),
+          },
+          controller.signal,
+        );
+        if (!controller.signal.aborted) {
+          sourceOverviewSystems = loadedOverview.systems;
+        }
+      } finally {
+        if (sourceOverviewRequest === controller) sourceOverviewRequest = undefined;
+      }
     }
+    await reloadSourceOverview(undefined);
     await applyLod();
 
     function overviewCount(): number {
@@ -579,7 +787,16 @@ export const ED3DM = {
       for (const group of groups) {
         for (const tile of group) {
           const current = merged.get(tile.key);
-          if (!current || tile.targetSystems >= current.targetSystems) {
+          const tileContent = tile.systems.length + (tile.densityCells?.length ?? 0);
+          const currentContent = current
+            ? current.systems.length + (current.densityCells?.length ?? 0)
+            : -1;
+          if (
+            !current ||
+            tileContent > currentContent ||
+            (tileContent === currentContent &&
+              tile.targetSystems >= current.targetSystems)
+          ) {
             merged.set(tile.key, tile);
           }
         }
@@ -608,6 +825,19 @@ export const ED3DM = {
       return [...merged.values()];
     }
 
+    function refreshSelectionRailsFromResidency() {
+      if (!selected) return;
+      const resident = [
+        ...sourceSelectionSystems,
+        ...sourceLocalSystems,
+        ...sourceSpatialTiles.flatMap((tile) => tile.systems),
+      ];
+      sourceSelectionSystems = [
+        selected,
+        ...selectionNeighborCandidates(resident, selected),
+      ];
+    }
+
     function visible(): System[] {
       const all = allSystems();
       return all.filter((s) => {
@@ -627,12 +857,16 @@ export const ED3DM = {
         const nonRenderedStellarObject =
           s.stellarType === "Nebula" ||
           s.stellarType === "StellarRemnantNebula";
+        const massCodeMatch =
+          !massCodeFilter?.length ||
+          (s.massCode !== undefined && massCodeFilter.includes(s.massCode));
         return (
           categoryMatch &&
           generationMatch &&
           stellarTypeMatch &&
           !stellarTypeExcluded &&
-          !nonRenderedStellarObject
+          !nonRenderedStellarObject &&
+          massCodeMatch
         );
       });
     }
@@ -661,24 +895,30 @@ export const ED3DM = {
     }
 
     function paint() {
+      refreshSelectionRailsFromResidency();
       const shown = visible();
       const detailKeys = new Set<string>();
       const densityWeights = new Map<string, number>();
-      for (const system of sourceOverviewSystems) {
-        densityWeights.set(systemKey(system), 1);
-      }
-      const maximumTilePopulationWeight = Math.max(
-        0,
-        ...sourceSpatialTiles.map(({ populationWeight }) => populationWeight),
+      const overviewDensityCells = filterOverviewDensityCells(
+        sourceOverviewSystems,
+        stellarTypeFilter,
+        excludedStellarTypeFilter,
+        categoryFilter,
+        generationFilter,
+        massCodeFilter,
+      );
+      const spatialDensityCells = sourceSpatialTiles.flatMap(
+        (tile) => tile.densityCells ?? [],
+      );
+      const maximumDensityCellCount = Math.max(
+        1,
+        ...spatialDensityCells.map(({ genuineSystemCount }) => genuineSystemCount),
       );
       for (const tile of sourceSpatialTiles) {
-        const densityWeight = maximumTilePopulationWeight > 0
-          ? Math.max(0.12, tile.populationWeight / maximumTilePopulationWeight)
-          : 0.12;
         for (const system of tile.systems) {
           const key = systemKey(system);
           detailKeys.add(key);
-          densityWeights.set(key, Math.max(densityWeights.get(key) ?? 0, densityWeight));
+          densityWeights.set(key, 0);
         }
       }
       for (const system of sourceLocalSystems) {
@@ -721,10 +961,26 @@ export const ED3DM = {
         densityWeights: shown.map(
           (system) => densityWeights.get(systemKey(system)) ?? 0,
         ),
+        densityCells: [
+          ...overviewDensityCells.map((cell) => ({
+            coords: cell.coords,
+            weight: cell.presentationWeight,
+            identity: cell.sourceKey,
+            color: cell.color,
+          })),
+          ...spatialDensityCells.map((cell) => ({
+            coords: cell.coords,
+            weight: Math.max(
+              0.08,
+              Math.sqrt(cell.genuineSystemCount / maximumDensityCellCount),
+            ),
+          })),
+        ],
         selected,
         routes,
         grid: showGrid,
         regionGrid: showRegionGrid,
+        names: showNames,
         theme,
       });
     }
@@ -755,10 +1011,17 @@ export const ED3DM = {
 
     function scheduleViewLod(view: GalaxyCameraView, delayMs: number) {
       acceptView(view);
+      const nextIdentity = detailViewRequestIdentity();
+      if (nextIdentity === activeDetailViewIdentity) return;
       viewLoadQueued = true;
       if (viewIdleTimer !== undefined) clearTimeout(viewIdleTimer);
       viewIdleTimer = setTimeout(() => {
         viewIdleTimer = undefined;
+        // OrbitControls can emit a new camera pose every ~90 ms during a
+        // wheel gesture or a scripted flight. Keep the last complete shell on
+        // screen while that pose is still moving, then cancel/replace the old
+        // request only when the debounced destination is ready to load.
+        abortSourceDetailRequests();
         void drainViewLod();
       }, delayMs);
     }
@@ -795,10 +1058,10 @@ export const ED3DM = {
               cameraDistanceLy,
               Math.hypot(22, 14, 52),
             );
-            scene?.flyCamera(preview.coords);
             scene?.setPlaneHeight(preview.coords.y);
+            scene?.flyCamera(preview.coords);
             paint();
-            void applyLod()
+            void ensureSourceLocal(true)
               .then(() => {
                 if (revision === flyRevision) paint();
               })
@@ -813,10 +1076,11 @@ export const ED3DM = {
             Math.hypot(22, 14, 52),
           );
           selected = sys;
-          void ensureSelectionNeighbors(sys, revision).catch(reportDetailLoadError);
+          sourceSelectionSystems = [sys];
           options.onSystemClick?.(sys);
           scene?.flyCamera(sys.coords);
           paint();
+          abortSourceDetailRequests();
           void applyLod()
             .then(() => {
               if (revision === flyRevision) paint();
@@ -851,12 +1115,25 @@ export const ED3DM = {
         paint();
         return sys;
       },
-      setFilter(filter) {
+      async setFilter(filter) {
+        const nextTypes = filter.stellarTypes;
+        const nextExcluded = filter.excludedStellarTypes ??
+          (nextTypes?.length ? undefined : ["RoguePlanet"]);
+        abortSourceDetailRequests();
         categoryFilter = filter.categories;
         generationFilter = filter.generations;
-        stellarTypeFilter = filter.stellarTypes;
-        excludedStellarTypeFilter = filter.excludedStellarTypes ??
-          (filter.stellarTypes?.length ? undefined : ["RoguePlanet"]);
+        stellarTypeFilter = nextTypes;
+        massCodeFilter = filter.massCodes;
+        excludedStellarTypeFilter = nextExcluded;
+        await reloadSourceOverview(nextTypes);
+        sourceLocalSystems = [];
+        sourceSpatialTiles = [];
+        completedSpatialTiers = new Set();
+        activeSpatialCompletionKey = undefined;
+        committedLocalRequestKey = undefined;
+        committedSpatialRequestKey = undefined;
+        paint();
+        await applyLod();
         paint();
       },
       setColorBy(mode) {
@@ -870,6 +1147,15 @@ export const ED3DM = {
       setRegionGrid(on) {
         showRegionGrid = on;
         paint();
+      },
+      setNames(on) {
+        showNames = on;
+        paint();
+        if (on && source && cameraView) {
+          committedLocalRequestKey = undefined;
+          committedSpatialRequestKey = undefined;
+          scheduleViewLod(cameraView, 0);
+        }
       },
       setTheme(next) {
         theme = next;
@@ -888,8 +1174,11 @@ export const ED3DM = {
       planeHeight() {
         return scene?.planeHeight() ?? 0;
       },
+      setGridSize(code) {
+        scene?.setGridSize(code);
+      },
       setMassCode(code) {
-        scene?.setMassCode(code);
+        scene?.setGridSize(code);
       },
       resetTopView() {
         scene?.resetTopView();
@@ -914,6 +1203,8 @@ export const ED3DM = {
         loaded.clear();
         tileCache.clear();
         sourceSpatialTiles = [];
+        completedSpatialTiers = new Set();
+        activeSpatialCompletionKey = undefined;
         sourceSelectionSystems = [];
         selected = undefined;
       },
@@ -977,10 +1268,14 @@ export const ED3DM = {
             if (!sys) return;
             const revision = ++flyRevision;
             selected = sys;
-            void ensureSelectionNeighbors(sys, revision).catch(reportDetailLoadError);
+            sourceSelectionSystems = [sys];
             options.onSystemClick?.(sys);
             scene?.flyCamera(sys.coords);
             paint();
+            if (source) {
+              abortSourceDetailRequests();
+              void applyLod().catch(reportDetailLoadError);
+            }
             if (!source || sys.id64 === undefined) return;
             const id64 = String(sys.id64);
             void source.resolve(id64)
@@ -1017,7 +1312,7 @@ export const ED3DM = {
           onViewChange(view) {
             options.onZoom?.(cameraZoomPercent(view.distanceLy));
             if (!source) return;
-            scheduleViewLod(view, 35);
+            scheduleViewLod(view, 140);
           },
           onViewIdle(view) {
             options.onZoom?.(cameraZoomPercent(view.distanceLy));
@@ -1034,7 +1329,8 @@ export const ED3DM = {
           onPlaneHeight(y) {
             options.onPlaneHeight?.(y);
           },
-          onMassCode(code, finest) {
+          onGridSize(code, finest) {
+            options.onGridSize?.(code, finest);
             options.onMassCode?.(code, finest);
           },
           viewCompass: options.viewCompass,

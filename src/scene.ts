@@ -110,6 +110,61 @@ export function cameraCruiseProgress(elapsedMs: number, durationMs = 650): numbe
   const linear = Math.min(1, Math.max(0, elapsedMs / Math.max(1, durationMs)));
   return 1 - (1 - linear) ** 3;
 }
+
+export function translatedCameraPosition(
+  cameraPosition: { x: number; y: number; z: number },
+  currentTarget: { x: number; y: number; z: number },
+  nextTarget: { x: number; y: number; z: number },
+): { x: number; y: number; z: number } {
+  return {
+    x: cameraPosition.x + nextTarget.x - currentTarget.x,
+    y: cameraPosition.y + nextTarget.y - currentTarget.y,
+    z: cameraPosition.z + nextTarget.z - currentTarget.z,
+  };
+}
+
+const LOCAL_NAME_SHELL_HALF_EXTENT_LY = 15;
+
+export function localNameLabelIndexes(
+  systems: readonly System[],
+  center: { x: number; y: number; z: number },
+  halfExtentLy = LOCAL_NAME_SHELL_HALF_EXTENT_LY,
+): number[] {
+  const extent = Math.max(0, halfExtentLy);
+  return systems.flatMap((system, index) => {
+    if (!system.name || system.name.startsWith("ID64 ")) return [];
+    return Math.abs(system.coords.x - center.x) <= extent &&
+      Math.abs(system.coords.y - center.y) <= extent &&
+      Math.abs(system.coords.z - center.z) <= extent
+      ? [index]
+      : [];
+  });
+}
+
+export function localNameLabelSystems(
+  systems: readonly System[],
+  center: { x: number; y: number; z: number },
+  limit = 96,
+): System[] {
+  return localNameLabelIndexes(systems, center)
+    .map((index) => systems[index]!)
+    .sort((left, right) => {
+      const leftDistance =
+        (left.coords.x - center.x) ** 2 +
+        (left.coords.y - center.y) ** 2 +
+        (left.coords.z - center.z) ** 2;
+      const rightDistance =
+        (right.coords.x - center.x) ** 2 +
+        (right.coords.y - center.y) ** 2 +
+        (right.coords.z - center.z) ** 2;
+      return leftDistance - rightDistance;
+    })
+    .slice(0, Math.max(0, limit));
+}
+
+export function localSystemNamesVisible(viewDistanceLy: number): boolean {
+  return Number.isFinite(viewDistanceLy) && viewDistanceLy <= 80;
+}
 export function regionLabelsVisible(viewDistanceLy: number): boolean {
   return viewDistanceLy >= 2_000;
 }
@@ -259,16 +314,23 @@ export type SceneHandle = {
     colors?: string[];
     details?: boolean[];
     densityWeights?: number[];
+    densityCells?: {
+      coords: { x: number; y: number; z: number };
+      weight: number;
+      identity?: string;
+      color?: string;
+    }[];
     selected?: System;
     routes?: Route[];
     grid?: boolean;
     regionGrid?: boolean;
+    names?: boolean;
     theme?: VisualTheme;
   }) => void;
   flyCamera: (target: { x: number; y: number; z: number }) => void;
   setPlaneHeight: (y: number) => void;
   planeHeight: () => number;
-  setMassCode: (code: MassCode) => void;
+  setGridSize: (code: MassCode) => void;
   resetTopView: () => void;
   viewState: () => GalaxyCameraView;
   destroy: () => void;
@@ -337,7 +399,7 @@ export async function attachScene(
     onViewChange?: (view: GalaxyCameraView) => void;
     onViewIdle?: (view: GalaxyCameraView) => void;
     onPlaneHeight?: (y: number) => void;
-    onMassCode?: (code: MassCode, finest: MassCode) => void;
+    onGridSize?: (code: MassCode, finest: MassCode) => void;
     viewCompass?: HTMLCanvasElement;
   },
 ): Promise<SceneHandle> {
@@ -348,6 +410,16 @@ export async function attachScene(
   canvas.style.cursor = "pointer";
   container.style.position = container.style.position || "relative";
   container.appendChild(canvas);
+  const nameLayer = document.createElement("div");
+  nameLayer.className = "ed3dm-system-names";
+  Object.assign(nameLayer.style, {
+    position: "absolute",
+    inset: "0",
+    overflow: "hidden",
+    pointerEvents: "none",
+    zIndex: "4",
+  });
+  container.appendChild(nameLayer);
 
   const initialTheme = handlers.initialTheme ?? "realistic";
   const initialBackground =
@@ -481,12 +553,19 @@ export async function attachScene(
   let orbSelected: boolean[] = [];
   let orbFocused: boolean[] = [];
   let orbDensityWeights: number[] = [];
+  let orbDensityCells: {
+    coords: { x: number; y: number; z: number };
+    weight: number;
+    identity?: string;
+    color?: string;
+  }[] = [];
   let orbTheme: VisualTheme | undefined;
   let lines: THREE.LineSegments | undefined;
   let routesLine: THREE.LineSegments | undefined;
   let systems: System[] = [];
   let showGrid = true;
   let showRegionGrid = true;
+  let showNames = false;
   let theme: VisualTheme = initialTheme;
   let massCode: MassCode = "h";
   let boxelWin: BoxelWindow | undefined;
@@ -520,6 +599,100 @@ export async function attachScene(
   let selectedAnchor: THREE.Vector3 | undefined;
   let selectedSystemKey: string | undefined;
   let selectionRails: number[] = [];
+  let nameLabels: { system: System; element: HTMLSpanElement }[] = [];
+  const projectedName = new THREE.Vector3();
+  const LOCAL_NAME_LABEL_LIMIT = 96;
+  let lastNameCenter = new THREE.Vector3(Number.NaN, Number.NaN, Number.NaN);
+  let lastNameSignature = "";
+
+  function clearNameLabels() {
+    nameLayer.replaceChildren();
+    nameLabels = [];
+  }
+
+  function refreshNameLabels(force = false) {
+    if (!showNames) {
+      clearNameLabels();
+      lastNameSignature = "";
+      nameLayer.hidden = true;
+      return;
+    }
+    const center = selectedAnchor ?? controls.target;
+    if (!force && lastNameCenter.distanceToSquared(center) < 4) return;
+    lastNameCenter.copy(center);
+    const labelSystems = localNameLabelSystems(
+      systems,
+      center,
+      LOCAL_NAME_LABEL_LIMIT,
+    );
+    const signature = `${theme}\0${labelSystems.map((system) => `${systemIdentity(system)}\0${system.name}`).join("\0")}`;
+    if (signature === lastNameSignature) return;
+    clearNameLabels();
+    lastNameSignature = signature;
+    const fragment = document.createDocumentFragment();
+    for (const system of labelSystems) {
+      const element = document.createElement("span");
+      element.textContent = system.name;
+      Object.assign(element.style, {
+        position: "absolute",
+        left: "0",
+        top: "0",
+        color: theme === "paper" ? "#242422" : "#eceae4",
+        fontFamily: '"IBM Plex Mono", ui-monospace, monospace',
+        fontSize: "12px",
+        fontWeight: "600",
+        lineHeight: "1",
+        letterSpacing: "0.02em",
+        textShadow:
+          theme === "paper"
+            ? "0 1px 2px rgba(255,255,255,0.85)"
+            : "0 1px 3px rgba(0,0,0,0.95)",
+        whiteSpace: "nowrap",
+        transform: "translate(-9999px, -9999px)",
+      });
+      nameLabels.push({ system, element });
+      fragment.appendChild(element);
+    }
+    nameLayer.appendChild(fragment);
+  }
+
+  function positionNameLabels() {
+    const visibleAtZoom =
+      showNames && localSystemNamesVisible(controlsDistance());
+    nameLayer.hidden = !visibleAtZoom;
+    if (!visibleAtZoom || nameLabels.length === 0) return;
+    const width = canvas.clientWidth;
+    const height = canvas.clientHeight;
+    const occupied: { left: number; top: number; right: number; bottom: number }[] = [];
+    for (const label of nameLabels) {
+      const system = label.system;
+      projectedName
+        .set(system.coords.x, system.coords.y, system.coords.z)
+        .project(camera);
+      const x = (projectedName.x + 1) * 0.5 * width + 9;
+      const y = (1 - projectedName.y) * 0.5 * height - 6;
+      const labelWidth = Math.min(230, Math.max(48, system.name.length * 7.4));
+      const bounds = {
+        left: x - 3,
+        top: y - 3,
+        right: x + labelWidth + 3,
+        bottom: y + 15,
+      };
+      const overlaps = occupied.some(
+        (other) =>
+          bounds.left < other.right && bounds.right > other.left &&
+          bounds.top < other.bottom && bounds.bottom > other.top,
+      );
+      const visible =
+        projectedName.z >= -1 && projectedName.z <= 1 &&
+        x >= 0 && x <= width && y >= 0 && y <= height &&
+        !overlaps;
+      label.element.hidden = !visible;
+      if (!visible) continue;
+      occupied.push(bounds);
+      label.element.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
+    }
+  }
 
   function lockLookAtToPlane() {
     const anchor = cameraAnchorTarget(selectedAnchor, planeY);
@@ -599,7 +772,7 @@ export async function attachScene(
     }
     if (codeChanged || finest !== lastFinest) {
       lastFinest = finest;
-      handlers.onMassCode?.(massCode, finest);
+      handlers.onGridSize?.(massCode, finest);
     }
   }
 
@@ -667,6 +840,20 @@ export async function attachScene(
   ring.renderOrder = 10;
   scene.add(ring);
 
+  const hoverRingGeo = new THREE.RingGeometry(1.55, 1.78, 64);
+  const hoverRingMat = new THREE.MeshBasicMaterial({
+    color: 0xf4b269,
+    side: THREE.DoubleSide,
+    transparent: true,
+    opacity: 0.78,
+    depthTest: false,
+    depthWrite: false,
+  });
+  const hoverRing = new THREE.Mesh(hoverRingGeo, hoverRingMat);
+  hoverRing.visible = false;
+  hoverRing.renderOrder = 9;
+  scene.add(hoverRing);
+
   const raycaster = new THREE.Raycaster();
   const projectedRailTarget = new THREE.Vector3();
 
@@ -703,6 +890,7 @@ export async function attachScene(
     gmat.opacity = visual === "paper" ? 0.7 : 0.45;
     tintRegionLayer(regionGrid, regionGridColor(visual), visual === "paper" ? 0.94 : 0.9);
     ringMat.color.set(visual === "paper" ? 0x1a1a19 : 0xe8e8e2);
+    hoverRingMat.color.set(visual === "paper" ? 0x8b4d16 : 0xf4b269);
     container.dataset.theme = visual;
   }
 
@@ -713,10 +901,17 @@ export async function attachScene(
     colors?: string[];
     details?: boolean[];
     densityWeights?: number[];
+    densityCells?: {
+      coords: { x: number; y: number; z: number };
+      weight: number;
+      identity?: string;
+      color?: string;
+    }[];
     selected?: System;
     routes?: Route[];
     grid?: boolean;
     regionGrid?: boolean;
+    names?: boolean;
     theme?: VisualTheme;
   }) {
     const nextSelectedSystemKey = state.selected
@@ -732,6 +927,7 @@ export async function attachScene(
     const nextDensityWeights = state.systems.map((_, index) =>
       Math.min(1, Math.max(0, state.densityWeights?.[index] ?? 0)),
     );
+    const nextDensityCells = state.densityCells ?? [];
     const nextSelectionRails = selectionRailIndexes(
       state.systems,
       state.selected,
@@ -744,6 +940,17 @@ export async function attachScene(
     const rebuildOrbs =
       orbTheme !== (state.theme ?? theme) ||
       state.systems.length !== systems.length ||
+      nextDensityCells.length !== orbDensityCells.length ||
+      nextDensityCells.some((cell, index) => {
+        const previous = orbDensityCells[index];
+        return previous === undefined ||
+          cell.coords.x !== previous.coords.x ||
+          cell.coords.y !== previous.coords.y ||
+          cell.coords.z !== previous.coords.z ||
+          cell.weight !== previous.weight ||
+          cell.identity !== previous.identity ||
+          cell.color !== previous.color;
+      }) ||
       state.systems.some(
         (system, index) =>
           system !== systems[index] ||
@@ -768,9 +975,11 @@ export async function attachScene(
     }
     showGrid = state.grid !== false;
     showRegionGrid = state.regionGrid !== false;
+    showNames = state.names === true;
     if (state.theme && state.theme !== theme) applyTheme(state.theme);
     grid.visible = showGrid;
     regionGrid.visible = showRegionGrid;
+    refreshNameLabels(true);
 
     if (rebuildOrbs) {
       disposeMesh(orbs, scene);
@@ -786,34 +995,55 @@ export async function attachScene(
     routesLine = undefined;
 
     const additive = false;
-    if (rebuildOrbs && state.systems.length) {
+    if (rebuildOrbs && (state.systems.length || nextDensityCells.length)) {
       const unresolvedDensity = state.systems
         .map((system, index) => ({ system, index }))
         .filter(({ index }) => nextDensityWeights[index]! > 0);
-      if (unresolvedDensity.length) {
+      const aggregateDensity = nextDensityCells.map((cell) => {
+        const key = cell.identity ??
+          `${cell.coords.x.toFixed(2)}:${cell.coords.y.toFixed(2)}:${cell.coords.z.toFixed(2)}`;
+        return {
+          x: cell.coords.x,
+          y: cell.coords.y,
+          z: cell.coords.z,
+          r: 1,
+          hex:
+            state.theme === "realistic"
+              ? (cell.color ?? densityFieldColor(cell.coords, key).hex)
+              : state.theme === "paper"
+                ? "#706f69"
+                : "#d8d0c0",
+          visibility: 0.2 + 0.8 * cell.weight,
+          opacityNoise: stableOrbNoise(key, 0x7195a3),
+        };
+      });
+      if (unresolvedDensity.length || aggregateDensity.length) {
         densityField = orbCloud(
-          unresolvedDensity.map(({ system, index }) => ({
-            x: system.coords.x,
-            y: system.coords.y,
-            z: system.coords.z,
-            r: 1,
-            hex:
-              state.theme === "realistic"
-                ? densityFieldColor(
-                    system.coords,
-                    String(system.id64 ?? system.name),
-                  ).hex
-                : state.theme === "paper"
-                  ? "#706f69"
-                  : "#d8d0c0",
-            visibility:
-              stableOrbVisibility(String(system.id64 ?? system.name)) *
-              (0.35 + 0.65 * nextDensityWeights[index]!),
-            opacityNoise: stableOrbNoise(
-              String(system.id64 ?? system.name),
-              0xd31f13,
-            ),
-          })),
+          [
+            ...unresolvedDensity.map(({ system, index }) => ({
+              x: system.coords.x,
+              y: system.coords.y,
+              z: system.coords.z,
+              r: 1,
+              hex:
+                state.theme === "realistic"
+                  ? densityFieldColor(
+                      system.coords,
+                      String(system.id64 ?? system.name),
+                    ).hex
+                  : state.theme === "paper"
+                    ? "#706f69"
+                    : "#d8d0c0",
+              visibility:
+                stableOrbVisibility(String(system.id64 ?? system.name)) *
+                (0.35 + 0.65 * nextDensityWeights[index]!),
+              opacityNoise: stableOrbNoise(
+                String(system.id64 ?? system.name),
+                0xd31f13,
+              ),
+            })),
+            ...aggregateDensity,
+          ],
           new THREE.Color(0xd8d0c0),
           {
             maxPx: 14,
@@ -848,7 +1078,7 @@ export async function attachScene(
               : 1,
         })),
         new THREE.Color(0x2e2e2c),
-        { maxPx: 12, additive },
+        { maxPx: 12, additive, soft: true },
       );
       orbs.renderOrder = 3;
       scene.add(orbs);
@@ -859,6 +1089,7 @@ export async function attachScene(
       orbSelected = nextSelected;
       orbFocused = nextFocused;
       orbDensityWeights = nextDensityWeights;
+      orbDensityCells = nextDensityCells;
       orbTheme = theme;
     }
     ring.visible = Boolean(state.selected);
@@ -931,10 +1162,31 @@ export async function attachScene(
     | { pointerId: number; x: number; y: number; button: number }
     | undefined;
 
-  function pickAt(clientX: number, clientY: number) {
+  function pickableIndexAt(clientX: number, clientY: number): number | undefined {
     const snappedIndex = snappedRailTarget(clientX, clientY);
-    if (snappedIndex !== undefined) {
-      handlers.onSelectSystem(snappedIndex);
+    if (snappedIndex !== undefined) return snappedIndex;
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return undefined;
+    const ndc = new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    raycaster.setFromCamera(ndc, camera);
+    if (!orbs) return undefined;
+    for (const hit of raycaster.intersectObject(orbs)) {
+      const id = hit.instanceId ?? hit.index;
+      if (id === undefined || !systems[id]) continue;
+      if (railSelectableIndex(id, selectionRails, Boolean(selectedSystemKey))) {
+        return id;
+      }
+    }
+    return undefined;
+  }
+
+  function pickAt(clientX: number, clientY: number) {
+    const pickedIndex = pickableIndexAt(clientX, clientY);
+    if (pickedIndex !== undefined) {
+      handlers.onSelectSystem(pickedIndex);
       return;
     }
     const rect = canvas.getBoundingClientRect();
@@ -943,20 +1195,6 @@ export async function attachScene(
       -((clientY - rect.top) / rect.height) * 2 + 1,
     );
     raycaster.setFromCamera(ndc, camera);
-    if (orbs) {
-      const hits = raycaster.intersectObject(orbs);
-      for (const hit of hits) {
-        const id = hit.instanceId ?? hit.index;
-        if (id === undefined) continue;
-        const sys = systems[id];
-        if (!sys) continue;
-        if (!railSelectableIndex(id, selectionRails, Boolean(selectedSystemKey))) {
-          continue;
-        }
-        handlers.onSelectSystem(id);
-        return;
-      }
-    }
     const pt = new THREE.Vector3();
     raycaster.ray.at(Math.min(controlsDistance() * 0.35, 5000), pt);
     handlers.onPickCell({ x: pt.x, y: pt.y, z: pt.z });
@@ -1020,6 +1258,36 @@ export async function attachScene(
     panLastY = ev.clientY;
   }
 
+  let hoverFrame = 0;
+  let hoverClientX = 0;
+  let hoverClientY = 0;
+  function updateHover() {
+    hoverFrame = 0;
+    if (planePanning) return;
+    const index = pickableIndexAt(hoverClientX, hoverClientY);
+    const system = index === undefined ? undefined : systems[index];
+    hoverRing.visible = Boolean(system);
+    canvas.style.cursor = system ? "pointer" : "default";
+    if (system) {
+      hoverRing.position.set(system.coords.x, system.coords.y, system.coords.z);
+    }
+  }
+
+  function onHoverPointerMove(ev: PointerEvent) {
+    if (planePanning) {
+      hoverRing.visible = false;
+      return;
+    }
+    hoverClientX = ev.clientX;
+    hoverClientY = ev.clientY;
+    if (!hoverFrame) hoverFrame = requestAnimationFrame(updateHover);
+  }
+
+  function onHoverPointerLeave() {
+    hoverRing.visible = false;
+    canvas.style.cursor = "default";
+  }
+
   function onPlanePanUp(ev: PointerEvent) {
     if (!planePanning) return;
     if (ev.type === "pointerup" && ev.button !== 2) return;
@@ -1042,6 +1310,8 @@ export async function attachScene(
   canvas.addEventListener("pointercancel", onPickPointerCancel);
   canvas.addEventListener("pointerdown", onPlanePanDown);
   canvas.addEventListener("pointermove", onPlanePanMove);
+  canvas.addEventListener("pointermove", onHoverPointerMove);
+  canvas.addEventListener("pointerleave", onHoverPointerLeave);
   canvas.addEventListener("pointerup", onPlanePanUp);
   canvas.addEventListener("pointercancel", onPlanePanUp);
   canvas.addEventListener("contextmenu", onContextMenu);
@@ -1079,7 +1349,6 @@ export async function attachScene(
       const progress = cameraCruiseProgress(performance.now() - cruiseStartedAt);
       camera.position.lerpVectors(cruiseFromPos, cruisePos, progress);
       controls.target.lerpVectors(cruiseFromTarget, cruiseTarget, progress);
-      lockLookAtToPlane();
       if (progress >= 1) {
         cruising = false;
         handlers.onViewIdle?.(currentViewState());
@@ -1094,6 +1363,9 @@ export async function attachScene(
     camera.updateMatrixWorld();
     refreshBoxelGrid();
     if (ring.visible) ring.lookAt(camera.position);
+    if (hoverRing.visible) hoverRing.lookAt(camera.position);
+    refreshNameLabels();
+    positionNameLabels();
     const d = controlsDistance();
     const nextShowRegionLabels = regionLabelsVisible(d);
     if (nextShowRegionLabels !== showRegionLabels) {
@@ -1130,6 +1402,7 @@ export async function attachScene(
     if (densityViewDistance) densityViewDistance.value = d;
     if (orbs) orbs.userData.orbViewportHeight = canvas.clientHeight || 600;
     ring.scale.setScalar(selectionRingScale(d));
+    hoverRing.scale.setScalar(selectionRingScale(d) * 0.5);
     if (handlers.viewCompass) drawViewGizmo(handlers.viewCompass, camera, theme);
     renderer.render(scene, camera);
   }
@@ -1142,7 +1415,12 @@ export async function attachScene(
       cruiseFromPos.copy(camera.position);
       cruiseFromTarget.copy(controls.target);
       cruiseTarget.copy(selectedAnchor);
-      cruisePos.set(target.x + 22, target.y + 14, target.z + 52);
+      const destination = translatedCameraPosition(
+        camera.position,
+        controls.target,
+        selectedAnchor,
+      );
+      cruisePos.set(destination.x, destination.y, destination.z);
       cruiseStartedAt = performance.now();
       cruising = true;
     },
@@ -1152,7 +1430,7 @@ export async function attachScene(
     planeHeight() {
       return planeY;
     },
-    setMassCode(code) {
+    setGridSize(code) {
       const finest = finestMassCode(
         controlsDistance(),
         camera.fov,
@@ -1161,12 +1439,12 @@ export async function attachScene(
       const next = effectiveBoxelMassCode(code, finest);
       lastFinest = finest;
       if (next === massCode) {
-        handlers.onMassCode?.(massCode, finest);
+        handlers.onGridSize?.(massCode, finest);
         return;
       }
       massCode = next;
       rebuildBoxelGrid();
-      handlers.onMassCode?.(massCode, finest);
+      handlers.onGridSize?.(massCode, finest);
     },
     resetTopView() {
       cruising = false;
@@ -1187,6 +1465,7 @@ export async function attachScene(
     },
     destroy() {
       cancelAnimationFrame(raf);
+      if (hoverFrame) cancelAnimationFrame(hoverFrame);
       if (viewChangeTimer !== undefined) clearTimeout(viewChangeTimer);
       resize.destroy();
       window.removeEventListener("resize", onResize);
@@ -1195,6 +1474,8 @@ export async function attachScene(
       canvas.removeEventListener("pointercancel", onPickPointerCancel);
       canvas.removeEventListener("pointerdown", onPlanePanDown);
       canvas.removeEventListener("pointermove", onPlanePanMove);
+      canvas.removeEventListener("pointermove", onHoverPointerMove);
+      canvas.removeEventListener("pointerleave", onHoverPointerLeave);
       canvas.removeEventListener("pointerup", onPlanePanUp);
       canvas.removeEventListener("pointercancel", onPlanePanUp);
       canvas.removeEventListener("contextmenu", onContextMenu);
@@ -1208,10 +1489,14 @@ export async function attachScene(
       disposeMesh(regionGrid, scene);
       scene.remove(grid);
       scene.remove(ring);
+      scene.remove(hoverRing);
       ringGeo.dispose();
       ringMat.dispose();
+      hoverRingGeo.dispose();
+      hoverRingMat.dispose();
       renderer.dispose();
       canvas.remove();
+      nameLayer.remove();
     },
   };
 }

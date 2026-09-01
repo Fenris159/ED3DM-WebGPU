@@ -56,12 +56,22 @@ const _ray = new Ray();
 const _pos = new Vector3();
 const _world = new Vector3();
 const ORB_DISTANCE_SCALE = 100;
-const ORB_LOCAL_MIN_DIAMETER_PX = 0.15;
+const ORB_OVERVIEW_LOCAL_MIN_DIAMETER_PX = 0.15;
+const ORB_DETAIL_LOCAL_MIN_DIAMETER_PX = 6;
 const ORB_GALAXY_MIN_DIAMETER_PX = 3;
 
 function smoothstepNumber(edge0: number, edge1: number, value: number): number {
   const t = Math.min(1, Math.max(0, (value - edge0) / (edge1 - edge0)));
   return t * t * (3 - 2 * t);
+}
+
+export function softDiscAlpha(radialDistance: number, opacity = 1): number {
+  const distance = Math.min(1, Math.max(0, radialDistance));
+  const inner =
+    0.95 - 0.45 * smoothstepNumber(0, 0.45, distance);
+  const radialAlpha =
+    inner * (1 - smoothstepNumber(0.45, 1, distance));
+  return radialAlpha * Math.min(1, Math.max(0, opacity));
 }
 
 export function representedSystemsPerOverviewPoint(
@@ -72,7 +82,7 @@ export function representedSystemsPerOverviewPoint(
 }
 
 export function densityFieldOpacity(viewDistance: number): number {
-  return smoothstepNumber(180, 8_000, Math.max(0, viewDistance));
+  return smoothstepNumber(0, 20, Math.max(0, viewDistance));
 }
 
 export type DensityFieldColor = { r: number; g: number; b: number; hex: string };
@@ -99,14 +109,18 @@ export function densityFieldColor(
 export function minimumOrbDiameter(
   viewDistance: number,
   visibility = 0.75,
+  detail = false,
 ): number {
+  const localMinimum = detail
+    ? ORB_DETAIL_LOCAL_MIN_DIAMETER_PX
+    : ORB_OVERVIEW_LOCAL_MIN_DIAMETER_PX;
   const overview = smoothstepNumber(10_000, 100_000, viewDistance);
   const base =
-    ORB_LOCAL_MIN_DIAMETER_PX +
-    (ORB_GALAXY_MIN_DIAMETER_PX - ORB_LOCAL_MIN_DIAMETER_PX) * overview;
+    localMinimum +
+    (ORB_GALAXY_MIN_DIAMETER_PX - localMinimum) * overview;
   const galaxyVariation = galaxyOrbVisibilityScale(visibility);
   const antiPopFloor =
-    ORB_LOCAL_MIN_DIAMETER_PX + (1 - ORB_LOCAL_MIN_DIAMETER_PX) * overview;
+    localMinimum + (1 - localMinimum) * overview;
   return Math.max(
     antiPopFloor,
     base * (1 + (galaxyVariation - 1) * overview),
@@ -235,7 +249,7 @@ export function focusedOrbDiameterCap(
     1.35,
     Math.max(0.75, viewDistance / Math.max(2, instanceDistance)),
   );
-  return baseMaximumPx * (1 + closeZoom * 0.55 * depthPerspective);
+  return baseMaximumPx * (1 + closeZoom * 2.5 * depthPerspective);
 }
 
 export function projectedOrbDiameter(
@@ -245,13 +259,14 @@ export function projectedOrbDiameter(
   viewDistance = distance,
   maxPx = 12,
   visibility = 0.75,
+  detail = false,
 ): number {
   const projected =
     (Math.max(0, scale) * ORB_DISTANCE_SCALE * Math.max(0.1, pixelRatio)) /
     Math.max(2, distance);
   return Math.min(
     maxPx,
-    Math.max(minimumOrbDiameter(viewDistance, visibility), projected),
+    Math.max(minimumOrbDiameter(viewDistance, visibility, detail), projected),
   );
 }
 
@@ -259,17 +274,23 @@ function pixelWidthNode(
   maxPx: number,
   uViewDistance: ReturnType<typeof uniform>,
 ) {
-  const instanceScale = attribute("instanceScale", "float");
+  const instancePresentation = attribute("instancePresentation", "vec4");
+  const instanceState = attribute("instanceState", "vec4");
+  const instanceScale = instancePresentation.x;
   const uMax = uniform(maxPx);
   const uPR = uniform(Math.min(window.devicePixelRatio, 2));
   return Fn(() => {
     const instancePosition = attribute("instancePosition").xyz;
-    const instanceVisibility = attribute("instanceVisibility", "float");
+    const instanceVisibility = instancePresentation.y;
     const mv = modelViewMatrix.mul(vec4(instancePosition, 1.0));
     const dist = max(float(2), mv.z.negate());
     const overview = smoothstep(float(10_000), float(100_000), uViewDistance);
+    // Keep the quad-width floor uniform. Feeding instanceDetail into this
+    // clamp invalidates the r172 WebGPU point pipeline and leaves the last
+    // successfully submitted frame frozen on screen.
+    const localMinimum = float(ORB_DETAIL_LOCAL_MIN_DIAMETER_PX);
     const minPx = mix(
-      float(ORB_LOCAL_MIN_DIAMETER_PX),
+      localMinimum,
       float(ORB_GALAXY_MIN_DIAMETER_PX),
       overview,
     );
@@ -280,7 +301,7 @@ function pixelWidthNode(
     );
     const presentationScale = mix(float(1), galaxyVariation, overview);
     const antiPopFloor = mix(
-      float(ORB_LOCAL_MIN_DIAMETER_PX),
+      localMinimum,
       float(1),
       overview,
     );
@@ -293,12 +314,12 @@ function pixelWidthNode(
       float(1.35),
     );
     const focusedMaximum = uMax.mul(
-      float(1).add(closeZoom.mul(0.55).mul(depthPerspective)),
+      float(1).add(closeZoom.mul(2.5).mul(depthPerspective)),
     );
     const maximum = mix(
       uMax,
       focusedMaximum,
-      attribute("instanceFocused", "float"),
+      instanceState.z,
     );
     return clamp(
       instanceScale.mul(ORB_DISTANCE_SCALE).div(dist).mul(uPR),
@@ -361,7 +382,7 @@ function cameraProximityOpacityNode(
   return mix(
     opacity,
     float(1),
-    attribute("instanceSelected", "float"),
+    attribute("instanceState", "vec4").y,
   );
 }
 
@@ -372,15 +393,13 @@ function farFieldOpacityNode(
   uCameraSide: ReturnType<typeof uniform>,
   uViewTarget: ReturnType<typeof uniform>,
 ) {
+  const instancePresentation = attribute("instancePresentation", "vec4");
+  const instanceState = attribute("instanceState", "vec4");
   const overview = smoothstep(float(10_000), float(100_000), uViewDistance);
   const galaxyOpacity = mix(
     float(0.08),
     float(1),
-    smoothstep(
-      float(0.15),
-      float(1),
-      attribute("instanceOpacityNoise", "float"),
-    ),
+    smoothstep(float(0.15), float(1), instancePresentation.z),
   );
   const presentationOpacity = mix(float(1), galaxyOpacity, overview);
   const localPresence = mix(
@@ -391,7 +410,7 @@ function farFieldOpacityNode(
   return mix(
     localPresence.mul(presentationOpacity),
     float(1),
-    attribute("instanceDetail", "float"),
+    instanceState.x,
   ).mul(
     cameraProximityOpacityNode(
       uViewDistance,
@@ -404,28 +423,32 @@ function farFieldOpacityNode(
 }
 
 function densityFieldWidthNode(uViewDistance: ReturnType<typeof uniform>) {
-  const presence = smoothstep(float(180), float(8_000), uViewDistance);
+  const presence = smoothstep(float(0), float(20), uViewDistance);
   const galaxyScale = smoothstep(float(8_000), float(100_000), uViewDistance);
   const width = mix(
     float(4),
     float(14),
-    attribute("instanceVisibility", "float"),
+    attribute("instancePresentation", "vec4").y,
   ).mul(mix(float(0.65), float(1), galaxyScale));
   return width.mul(presence).mul(0.5);
 }
 
 function densityFieldOpacityNode(uViewDistance: ReturnType<typeof uniform>) {
-  const presence = smoothstep(float(180), float(8_000), uViewDistance);
+  const presence = smoothstep(float(0), float(20), uViewDistance);
   const galaxyScale = smoothstep(float(8_000), float(100_000), uViewDistance);
   const variation = mix(
     float(0.45),
     float(1),
-    attribute("instanceOpacityNoise", "float"),
+    attribute("instancePresentation", "vec4").z,
   );
   return presence.mul(mix(float(0.035), float(0.11), galaxyScale)).mul(variation);
 }
 
 class SoftDiscMaterial extends InstancedPointsNodeMaterial {
+  private readonly discOpacityNode: ReturnType<
+    typeof densityFieldOpacityNode
+  > | ReturnType<typeof attribute>;
+
   constructor(
     maxPx: number,
     additive: boolean,
@@ -447,7 +470,7 @@ class SoftDiscMaterial extends InstancedPointsNodeMaterial {
     this.pointWidthNode = density
       ? densityFieldWidthNode(viewDistance)
       : pixelWidthNode(maxPx, viewDistance);
-    this.opacityNode = density
+    this.discOpacityNode = density
       ? densityFieldOpacityNode(viewDistance)
       : farFieldOpacityNode(
           viewDistance,
@@ -456,15 +479,16 @@ class SoftDiscMaterial extends InstancedPointsNodeMaterial {
           cameraSide,
           viewTarget,
         );
+    const instancePresentation = attribute("instancePresentation", "vec4");
     this.pointColorNode = attribute("instanceColor")
-      .mul(attribute("instanceBrightness", "float"))
+      .mul(instancePresentation.w)
       .mul(mix(
         float(0.9),
         float(1.65),
         smoothstep(
           float(0.55),
           float(1),
-          attribute("instanceVisibility", "float"),
+          instancePresentation.y,
         ),
       ));
   }
@@ -488,9 +512,12 @@ class SoftDiscMaterial extends InstancedPointsNodeMaterial {
     this.fragmentNode = Fn(() => {
       const d = length(uv().mul(2).sub(1));
       d.greaterThan(1.0).discard();
-      const inner = mix(float(0.55), float(0.18), smoothstep(float(0), float(0.35), d));
-      const alpha = mix(inner, float(0), smoothstep(float(0.35), float(1), d));
-      return vec4(tint, alpha);
+      const inner = mix(float(0.95), float(0.5), smoothstep(float(0), float(0.45), d));
+      const alpha = mix(inner, float(0), smoothstep(float(0.45), float(1), d));
+      return vec4(
+        tint,
+        alpha.mul(this.discOpacityNode),
+      );
     })();
     NodeMaterial.prototype.setup.call(this, builder);
   }
@@ -522,14 +549,14 @@ function hardDiscMaterial(
     viewTarget,
   );
   mat.pointColorNode = attribute("instanceColor")
-    .mul(attribute("instanceBrightness", "float"))
+    .mul(attribute("instancePresentation", "vec4").w)
     .mul(mix(
       float(0.9),
       float(1.65),
       smoothstep(
         float(0.55),
         float(1),
-        attribute("instanceVisibility", "float"),
+        attribute("instancePresentation", "vec4").y,
       ),
     ));
   return mat;
@@ -606,26 +633,27 @@ export function orbCloud(
   },
 ): Mesh {
   const pos = new Float32Array(items.length * 3);
-  const scale = new Float32Array(items.length);
-  const visibility = new Float32Array(items.length);
+  const presentation = new Float32Array(items.length * 4);
+  const state = new Float32Array(items.length * 4);
   const opacityNoise = new Float32Array(items.length);
   const detail = new Float32Array(items.length);
   const selected = new Float32Array(items.length);
-  const focused = new Float32Array(items.length);
-  const brightness = new Float32Array(items.length);
   const cols = new Float32Array(items.length * 3);
   const tint = new Color();
   items.forEach((p, i) => {
     pos[i * 3] = p.x;
     pos[i * 3 + 1] = p.y;
     pos[i * 3 + 2] = p.z;
-    scale[i] = p.r;
-    visibility[i] = p.visibility ?? 1;
+    presentation[i * 4] = p.r;
+    presentation[i * 4 + 1] = p.visibility ?? 1;
     opacityNoise[i] = p.opacityNoise ?? 1;
+    presentation[i * 4 + 2] = opacityNoise[i]!;
+    presentation[i * 4 + 3] = p.brightness ?? 1;
     detail[i] = p.detail ? 1 : 0;
     selected[i] = p.selected ? 1 : 0;
-    focused[i] = p.focused ? 1 : 0;
-    brightness[i] = p.brightness ?? 1;
+    state[i * 4] = detail[i]!;
+    state[i * 4 + 1] = selected[i]!;
+    state[i * 4 + 2] = p.focused ? 1 : 0;
     if (p.hex) tint.set(p.hex);
     else tint.copy(color);
     cols[i * 3] = tint.r;
@@ -635,21 +663,13 @@ export function orbCloud(
   const geo = new InstancedPointsGeometry();
   geo.setPositions(pos);
   geo.setColors(cols);
-  geo.setAttribute("instanceScale", new InstancedBufferAttribute(scale, 1));
   geo.setAttribute(
-    "instanceVisibility",
-    new InstancedBufferAttribute(visibility, 1),
+    "instancePresentation",
+    new InstancedBufferAttribute(presentation, 4),
   );
   geo.setAttribute(
-    "instanceOpacityNoise",
-    new InstancedBufferAttribute(opacityNoise, 1),
-  );
-  geo.setAttribute("instanceDetail", new InstancedBufferAttribute(detail, 1));
-  geo.setAttribute("instanceSelected", new InstancedBufferAttribute(selected, 1));
-  geo.setAttribute("instanceFocused", new InstancedBufferAttribute(focused, 1));
-  geo.setAttribute(
-    "instanceBrightness",
-    new InstancedBufferAttribute(brightness, 1),
+    "instanceState",
+    new InstancedBufferAttribute(state, 4),
   );
   const viewDistance = uniform(30_000);
   const planeY = uniform(0);

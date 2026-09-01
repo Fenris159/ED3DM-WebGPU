@@ -28,7 +28,7 @@ export function cameraResidencyAnchor(
   return { x: focus.x, y: planeY ?? focus.y, z: focus.z };
 }
 
-export type RadialMassCodeShell = {
+export type RadialSpatialShell = {
   tier: "h" | "g" | "f" | "e";
   weight: number;
   outerBounds: GalaxyViewBounds;
@@ -39,16 +39,17 @@ export type RadialMassCodeShell = {
 /**
  * Camera-local residency is centered on the focus, not the frustum or the
  * containing Forge boxel's origin. The canonical PEGE storage tiles remain
- * h-sized. G/F/E define successively smaller geometric expansion bands around
- * the focused h-sized cube. Their source reads use the next coarser canonical
+ * H-sized. G/F/E describe successively narrower geometric expansion bands around
+ * the focused H-sized area. They do not select System mass codes. Their source
+ * reads use the next coarser canonical
  * storage level, then are clipped into complete 3D shells after generation.
  * This preserves genuine positions while avoiding dozens of fine-tile worker
  * passes for low-density blending tiers. Every shell receives a smaller stable
  * prefix.
  */
-export function radialMassCodeShellPlan(
+export function radialSpatialShellPlan(
   target: { x: number; y: number; z: number },
-): RadialMassCodeShell[] {
+): RadialSpatialShell[] {
   const h = containingBoxel(target, "h");
   const tiers = [
     { tier: "h" as const, expansion: 0, weight: 1 },
@@ -71,7 +72,7 @@ export function radialMassCodeShellPlan(
         z: target.z + halfEdge,
       },
     };
-    const shell: RadialMassCodeShell = {
+    const shell: RadialSpatialShell = {
       tier,
       weight,
       outerBounds,
@@ -87,8 +88,8 @@ export function radialMassCodeShellPlan(
   });
 }
 
-export function radialMassCodeShellContains(
-  shell: RadialMassCodeShell,
+export function radialSpatialShellContains(
+  shell: RadialSpatialShell,
   coords: { x: number; y: number; z: number },
 ): boolean {
   const outer = shell.outerBounds;
@@ -105,8 +106,8 @@ export function radialMassCodeShellContains(
   );
 }
 
-export function radialMassCodeShellTargets(
-  shells: readonly RadialMassCodeShell[],
+export function radialSpatialShellTargets(
+  shells: readonly RadialSpatialShell[],
   totalTargetSystems: number,
 ): number[] {
   if (shells.length === 0 || totalTargetSystems <= 0) return [];
@@ -419,18 +420,24 @@ export function pegeTilePointBudget(
   tileCount: number,
 ): number {
   if (tileCount <= 0) return 0;
-  const maximum =
-    cameraDistanceLy < 600
-      ? 60_000
-      : cameraDistanceLy < 1_600
-        ? 50_000
-        : cameraDistanceLy < 4_000
-          ? 40_000
-          : cameraDistanceLy < 8_000
-            ? 30_000
-            : cameraDistanceLy < 16_000
-              ? 20_000
-              : 10_000;
+  const farDistance = LOCAL_DETAIL_MAX_DISTANCE_LY;
+  const fullDistance = 300;
+  const normalized = Math.min(
+    1,
+    Math.max(
+      0,
+      (Math.log(farDistance) - Math.log(Math.max(fullDistance, cameraDistanceLy))) /
+        (Math.log(farDistance) - Math.log(fullDistance)),
+    ),
+  );
+  const smooth = normalized * normalized * (3 - 2 * normalized);
+  const unquantizedMaximum = 20_000 + 40_000 * smooth;
+  // Small stable steps avoid abort/restart churn on every wheel event while
+  // still exposing visibly progressive detail throughout the zoom gesture.
+  const maximum = Math.min(
+    60_000,
+    Math.max(20_000, Math.round(unquantizedMaximum / 1_000) * 1_000),
+  );
   const fraction = lod === "all" ? 1 : Math.max(0.05, Math.min(1, lod / 100));
   return Math.max(tileCount, Math.ceil(maximum * fraction));
 }

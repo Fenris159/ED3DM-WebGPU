@@ -80,13 +80,17 @@ _Avoid_: dust, impostor field, camera bubble
 A stable PEGE world-space volume that contributes a population-guided sample of real Systems intersecting the current view. Its identity is independent of camera motion and neighboring tile requests.
 _Avoid_: camera bubble, catalogue tile, renderer chunk
 
-**Radial mass-code residency**:
-A volumetric local-detail stack centered on the last selected System, or otherwise on the camera's X/Z focus at the current height. The centered 1,280-ly h-sized cube receives the full local share; successively thinner g-, f-, and e-width shells surround it on all six sides with decreasing shares. PEGE's stable storage keys remain h-sized, and ED3DM clips genuine results into each complete geometric shell before publishing it.
+**Radial spatial residency**:
+A volumetric local-detail stack centered on the last selected System, or otherwise on the camera's X/Z focus at the current height. The centered 1,280-ly H-sized area receives the full local share; successively thinner G-, F-, and E-width geometric shells surround it on all six sides with decreasing shares. These letters describe area dimensions only: every tier contains all System mass codes allowed by the independent Mass-code filter. PEGE's stable storage keys remain H-sized, and ED3DM clips genuine results into each complete geometric shell before publishing it.
 _Avoid_: fixed height layers; frustum-directed wedges; partially published shells; moving generated Systems
 
 **Exact local detail**:
 Complete real-System enumeration inside a deliberately small area used at the closest map scale.
 _Avoid_: representative sample, whole galaxy
+
+**Factual center preview**:
+A temporary exact area published promptly while the complete radial spatial residency is still loading. It grows in stages—10 ly, then 40 ly, then 160 ly at 70% zoom—and publishes genuine PEGE batches as each stage is decoded. Zoom chooses only the preview stages and PEGE sampling budget; the preview never replaces, shrinks, or defines the final 1,280-ly H-sized core. A changed view cancels obsolete preview and residency work before scheduling the replacement.
+_Avoid_: residency boundary; synthetic fill; partially published spatial shell
 
 **All Resident**:
 The warned maximum LOD state that applies no extra ED3DM thinning to the overview and camera-resident detail supplied by PEGE.
@@ -107,6 +111,10 @@ _Avoid_: route data; selecting the aggregate density glow
 **Grid level**:
 The user-selected boxel-lattice resolution currently illustrated by the Map app. It remains fixed while zoom changes; the camera may independently choose a coarser residency boxel without changing this filter or any System’s mass code.
 _Avoid_: System mass code
+
+**Mass-code filter**:
+An independent System-population filter over the immutable A-H code encoded in ID64. “Show child boxels” includes smaller codes A through the selected code. It never changes Grid size or spatial-residency area.
+_Avoid_: camera LOD; Grid size; residency-shell width
 
 **Grid view**:
 Either the flat X/Z lattice or the 3D wireframe of boxels at the current Grid level.

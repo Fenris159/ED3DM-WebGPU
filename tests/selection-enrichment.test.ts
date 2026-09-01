@@ -2,7 +2,21 @@ import { describe, expect, it, vi } from "vitest";
 import type { GalaxySource, System } from "../src/types";
 
 const sceneHarness = vi.hoisted(() => ({
-  handlers: undefined as undefined | { onSelectSystem(index: number): void },
+  handlers: undefined as undefined | {
+    onSelectSystem(index: number): void;
+    onViewChange(view: {
+      target: { x: number; y: number; z: number };
+      position: { x: number; y: number; z: number };
+      direction: { x: number; y: number; z: number };
+      distanceLy: number;
+      verticalFovDegrees: number;
+      aspect: number;
+      visibleBounds: {
+        minimum: { x: number; y: number; z: number };
+        maximum: { x: number; y: number; z: number };
+      };
+    }): void;
+  },
 }));
 
 vi.mock("../src/scene", () => ({
@@ -14,7 +28,7 @@ vi.mock("../src/scene", () => ({
       flyCamera: vi.fn(),
       setPlaneHeight: vi.fn(),
       planeHeight: () => 0,
-      setMassCode: vi.fn(),
+      setGridSize: vi.fn(),
       resetTopView: vi.fn(),
       viewState: () => ({
         target: { x: 0, y: 0, z: 0 },
@@ -141,7 +155,101 @@ describe("selected-System enrichment", () => {
         expect.arrayContaining([selected, ...neighbors]),
       );
       map.clearSelection();
-      expect(map.visibleSystems()).toEqual([selected]);
+      // Deselecting removes the rail lock, but factual points already resident
+      // in the local cache remain available for unrestricted picking.
+      expect(map.visibleSystems()).toEqual(
+        expect.arrayContaining([selected, ...neighbors]),
+      );
+      map.destroy();
+    } finally {
+      Object.defineProperty(navigator, "userAgent", {
+        configurable: true,
+        value: userAgent,
+      });
+    }
+  });
+
+  it("keeps the resident shell while continuous camera changes debounce", async () => {
+    Object.defineProperty(navigator, "gpu", { configurable: true, value: {} });
+    const userAgent = navigator.userAgent;
+    Object.defineProperty(navigator, "userAgent", {
+      configurable: true,
+      value: "Mozilla/5.0 ED3DM integration test",
+    });
+    const preview: System = {
+      name: "Factual preview",
+      id64: "99",
+      coords: { x: 0, y: 0, z: 0 },
+      stellarType: "G",
+    };
+    const loadRegion = vi.fn(async (request) => {
+      request.onPartialSystems?.([preview]);
+      return [preview];
+    });
+    let activeSignal: AbortSignal | undefined;
+    const loadSpatialTiles = vi.fn(async (request, signal?: AbortSignal) => {
+      activeSignal = signal;
+      request.onPartialTiles?.([{
+        key: "partial",
+        tileKey: { level: 0, x: 0, y: 0, z: 0 },
+        targetSystems: 1,
+        populationWeight: 1,
+        systems: [preview],
+        densityCells: [],
+      }]);
+      return await new Promise<never>(() => undefined);
+    });
+    const source: GalaxySource = {
+      loadOverview: vi.fn(async () => ({ systems: [] })),
+      loadRegion,
+      loadSpatialTiles,
+      resolve: vi.fn(async () => undefined),
+      suggest: vi.fn(async () => []),
+      resolveDisplayName: vi.fn(async () => undefined),
+      destroy: vi.fn(),
+    };
+    try {
+      const map = await ED3DM.create({ container: document.body, source, lod: "all" });
+      await vi.waitFor(() => expect(loadSpatialTiles).toHaveBeenCalled());
+      await vi.waitFor(() => expect(map.visibleSystems()).toContain(preview));
+      const initialSignal = activeSignal;
+      sceneHarness.handlers!.onViewChange({
+        target: { x: 0, y: 0, z: 0 },
+        position: { x: 0, y: 10, z: 10 },
+        direction: { x: 0, y: -1, z: -1 },
+        distanceLy: 100,
+        verticalFovDegrees: 50,
+        aspect: 1,
+        visibleBounds: {
+          minimum: { x: -100, y: -100, z: -100 },
+          maximum: { x: 100, y: 100, z: 100 },
+        },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(initialSignal?.aborted).toBe(false);
+      const nextView = {
+        target: { x: 20, y: 0, z: 0 },
+        position: { x: 20, y: 5, z: 5 },
+        direction: { x: 0, y: -1, z: -1 },
+        distanceLy: 50,
+        verticalFovDegrees: 50,
+        aspect: 1,
+        visibleBounds: {
+          minimum: { x: -30, y: -50, z: -50 },
+          maximum: { x: 70, y: 50, z: 50 },
+        },
+      };
+      sceneHarness.handlers!.onViewChange(nextView);
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      sceneHarness.handlers!.onViewChange({
+        ...nextView,
+        target: { x: 30, y: 0, z: 0 },
+        position: { x: 30, y: 5, z: 5 },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      expect(initialSignal?.aborted).toBe(false);
+      await vi.waitFor(() => expect(initialSignal?.aborted).toBe(true));
+      expect(loadSpatialTiles).toHaveBeenCalledTimes(2);
       map.destroy();
     } finally {
       Object.defineProperty(navigator, "userAgent", {

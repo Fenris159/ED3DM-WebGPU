@@ -1,8 +1,13 @@
 import { ED3DM, MASS_CODES, PegeGalaxySource } from "../src/index";
 import pegeRuntimeUrl from "pege/pege-runtime.bin?url";
 import { heightRailLayout } from "./hud-layout";
+import { LOCAL_DETAIL_MAX_DISTANCE_LY } from "../src/pege-tiles";
+import { cameraZoomPercent } from "../src/scene";
 import {
   detailLoadPresentation,
+  filterApplyPresentation,
+  filteredDetailResultPresentation,
+  galaxyLoadProgressComplete,
   galaxyLoadPresentation,
 } from "../src/loading-progress";
 import type {
@@ -40,13 +45,16 @@ const filterOptions = document.querySelector("#filter-options") as HTMLElement;
 const filterSummary = document.querySelector("#filter-summary") as HTMLElement;
 const grid = document.querySelector("#grid") as HTMLInputElement;
 const regions = document.querySelector("#regions") as HTMLInputElement;
+const names = document.querySelector("#names") as HTMLInputElement;
 const height = document.querySelector("#height") as HTMLInputElement;
 const heightFill = document.querySelector("#height-fill") as HTMLElement;
 const heightReadout = document.querySelector("#height-readout") as HTMLElement;
 const zoomPercent = document.querySelector("#zoom-percent") as HTMLElement;
 const heightUp = document.querySelector("#height-up") as HTMLButtonElement;
 const heightDown = document.querySelector("#height-down") as HTMLButtonElement;
-const masscode = document.querySelector("#masscode") as HTMLSelectElement;
+const gridSize = document.querySelector("#grid-size") as HTMLSelectElement;
+const massCodeFilter = document.querySelector("#masscode-filter") as HTMLSelectElement;
+const massCodeChildren = document.querySelector("#masscode-children") as HTMLInputElement;
 const hud = document.querySelector("#hud") as HTMLElement;
 const heightRail = document.querySelector("#height-rail") as HTMLElement;
 const viewAnchor = document.querySelector("#view-anchor") as HTMLElement;
@@ -56,7 +64,11 @@ let lodRevision = 0;
 let finestMassCode: MassCode = "h";
 let visibleDetailCount = 0;
 let detailLoadingHideTimer = 0;
-const pegeRuntimeV17Url = `${pegeRuntimeUrl}${pegeRuntimeUrl.includes("?") ? "&" : "?"}v=1.7.0`;
+let filterApplicationActive = false;
+let filteredPopulationActive = false;
+let currentZoomPercent = 0;
+let latestDetailGenerationComplete = true;
+const pegeRuntimeStellarReplayUrl = `${pegeRuntimeUrl}${pegeRuntimeUrl.includes("?") ? "&" : "?"}v=1.8.0-runtime-2`;
 
 function syncHeightRailLayout() {
   const layout = heightRailLayout({
@@ -92,24 +104,52 @@ function updateLoading(progress: GalaxyLoadProgress) {
 
 function updateDetailLoading(progress: GalaxyLoadProgress) {
   const presentation = detailLoadPresentation(progress);
-  showDetailLoading(presentation.percent, presentation.label);
+  latestDetailGenerationComplete = galaxyLoadProgressComplete(progress);
+  showDetailLoading(
+    presentation.percent,
+    presentation.label,
+    presentation.percent < 100,
+  );
 }
 
-function showDetailLoading(percent: number, label: string) {
+function updateFilterLoading(progress: GalaxyLoadProgress) {
+  const presentation = filterApplyPresentation(progress);
+  showDetailLoading(presentation.percent, presentation.label, true);
+}
+
+function showDetailLoading(
+  percent: number,
+  label: string,
+  persistent = false,
+) {
   window.clearTimeout(detailLoadingHideTimer);
   detailLoadingPercent.textContent = `${percent}%`;
   detailLoadingCopy.textContent = label;
   detailLoadingStatus.hidden = false;
   detailLoadingStatus.setAttribute("aria-label", `${percent}% ${label}`);
+  if (persistent) return;
   detailLoadingHideTimer = window.setTimeout(
     () => {
       detailLoadingStatus.hidden = true;
     },
-    percent >= 100 ? 450 : 30_000,
+    percent >= 100 ? 1_500 : 30_000,
   );
 }
 
 function showDetailRendered() {
+  if (filterApplicationActive) {
+    updateFilterLoading({ phase: "detail", completed: 1, total: 1 });
+    return;
+  }
+  if (!latestDetailGenerationComplete) return;
+  if (filteredPopulationActive) {
+    const presentation = filteredDetailResultPresentation(
+      visibleDetailCount,
+      currentZoomPercent >= cameraZoomPercent(LOCAL_DETAIL_MAX_DISTANCE_LY),
+    );
+    showDetailLoading(presentation.percent, presentation.label);
+    return;
+  }
   const presentation = detailLoadPresentation(
     { phase: "detail", completed: 1, total: 1 },
     true,
@@ -118,7 +158,8 @@ function showDetailRendered() {
 }
 
 function updateEngineProgress(progress: GalaxyLoadProgress) {
-  if (progress.phase === "detail") updateDetailLoading(progress);
+  if (filterApplicationActive) updateFilterLoading(progress);
+  else if (progress.phase === "detail") updateDetailLoading(progress);
   else updateLoading(progress);
 }
 
@@ -162,7 +203,8 @@ function syncHeightUi(y: number) {
 }
 
 function syncZoomUi(percent: number) {
-  zoomPercent.textContent = `${Math.min(100, Math.max(0, Math.round(percent)))}%`;
+  currentZoomPercent = Math.min(100, Math.max(0, Math.round(percent)));
+  zoomPercent.textContent = `${currentZoomPercent}%`;
 }
 
 function applyHeight(y: number) {
@@ -209,13 +251,22 @@ function show(system: System | undefined) {
   });
 }
 
-function syncMassCodeUi(code: MassCode, finest: MassCode) {
+function syncGridSizeUi(code: MassCode, finest: MassCode) {
   finestMassCode = finest;
-  for (const option of Array.from(masscode.options)) {
+  for (const option of Array.from(gridSize.options)) {
     option.disabled = false;
   }
-  if (masscode.value !== code) masscode.value = code;
+  if (gridSize.value !== code) gridSize.value = code;
   syncLodReadout();
+}
+
+function selectedMassCodes(): number[] | undefined {
+  if (massCodeFilter.value === "all") return undefined;
+  const selected = MASS_CODES.indexOf(massCodeFilter.value as MassCode);
+  if (selected < 0) return undefined;
+  return massCodeChildren.checked
+    ? Array.from({ length: selected + 1 }, (_, index) => index)
+    : [selected];
 }
 
 function updateCount() {
@@ -227,7 +278,7 @@ function updateCount() {
 
 async function main() {
   const source = new PegeGalaxySource({
-    runtimeUrl: pegeRuntimeV17Url,
+    runtimeUrl: pegeRuntimeStellarReplayUrl,
     onProgress: updateEngineProgress,
   });
   map = await ED3DM.create({
@@ -238,7 +289,7 @@ async function main() {
     onSystemClick: show,
     onPlaneHeight: syncHeightUi,
     onZoom: syncZoomUi,
-    onMassCode: syncMassCodeUi,
+    onGridSize: syncGridSizeUi,
     onVisibleSystemsChange(count, detailCount) {
       visibleDetailCount = detailCount;
       const detail = detailCount
@@ -391,6 +442,58 @@ async function main() {
     filterOptions.append(fieldset);
   }
 
+  const applyFilter = document.createElement("button");
+  applyFilter.id = "filter-apply";
+  applyFilter.type = "button";
+  applyFilter.textContent = "Apply";
+  applyFilter.disabled = true;
+  filterOptions.append(applyFilter);
+
+  const selectedFilterKeys = () => Array.from(
+    filterOptions.querySelectorAll<HTMLInputElement>(
+      'input[name="stellar-filter"]:checked',
+    ),
+    (input) => input.value,
+  );
+  let appliedFilterKeys: string[] = [];
+
+  const applyFilters = async (keys: string[], closeStellarMenu: boolean) => {
+    applyFilter.disabled = true;
+    applyFilter.textContent = "Applying…";
+    engineStatus.textContent = "PEGE filtering";
+    filterApplicationActive = true;
+    updateFilterLoading({ phase: "overview", completed: 0, total: 1 });
+    try {
+      await map.setFilter({
+        ...stellarFilterForKeys(keys),
+        ...(selectedMassCodes() ? { massCodes: selectedMassCodes() } : {}),
+      });
+      filteredPopulationActive =
+        keys.length > 0 || Boolean(selectedMassCodes()?.length);
+      const presentation = filteredPopulationActive
+        ? filteredDetailResultPresentation(
+            visibleDetailCount,
+            currentZoomPercent >= cameraZoomPercent(LOCAL_DETAIL_MAX_DISTANCE_LY),
+          )
+        : filterApplyPresentation(
+            { phase: "detail", completed: 1, total: 1 },
+            true,
+          );
+      showDetailLoading(presentation.percent, presentation.label);
+      updateCount();
+      if (closeStellarMenu) filter.removeAttribute("open");
+    } catch (error) {
+      console.error("ED3DM: filter reload failed", error);
+      engineStatus.textContent = "Filter failed";
+      showDetailLoading(0, "Filter failed");
+      throw error;
+    } finally {
+      filterApplicationActive = false;
+      applyFilter.disabled = false;
+      applyFilter.textContent = "Apply";
+    }
+  };
+
   filterOptions.addEventListener("change", (event) => {
     const changed = event.target as HTMLInputElement;
     if (changed === allFilter && allFilter.checked) {
@@ -400,25 +503,33 @@ async function main() {
     } else if (changed.name === "stellar-filter") {
       allFilter.checked = false;
     }
-    const keys = Array.from(
-      filterOptions.querySelectorAll<HTMLInputElement>(
-        'input[name="stellar-filter"]:checked',
-      ),
-      (input) => input.value,
-    );
+    const keys = selectedFilterKeys();
     if (keys.length === 0) allFilter.checked = true;
     filterSummary.textContent = stellarFilterLabel(keys);
     filterSummary.title = filterSummary.textContent;
-    map.setFilter(stellarFilterForKeys(keys));
-    updateCount();
+    applyFilter.disabled = false;
+  });
+  applyFilter.addEventListener("click", () => {
+    const keys = selectedFilterKeys();
+    appliedFilterKeys = keys;
+    void applyFilters(keys, true).catch(() => undefined);
   });
   grid.addEventListener("change", () => map.setGrid(grid.checked));
   regions.addEventListener("change", () => map.setRegionGrid(regions.checked));
+  names.addEventListener("change", () => map.setNames(names.checked));
   height.addEventListener("input", () => applyHeight(Number(height.value)));
   bindHeightNudge(heightUp, HEIGHT_STEP);
   bindHeightNudge(heightDown, -HEIGHT_STEP);
-  masscode.addEventListener("change", () => {
-    map.setMassCode(masscode.value as MassCode);
+  gridSize.addEventListener("change", () => {
+    map.setGridSize(gridSize.value as MassCode);
+  });
+  massCodeFilter.addEventListener("change", () => {
+    massCodeChildren.disabled = massCodeFilter.value === "all";
+    if (massCodeChildren.disabled) massCodeChildren.checked = false;
+    void applyFilters(appliedFilterKeys, false).catch(() => undefined);
+  });
+  massCodeChildren.addEventListener("change", () => {
+    void applyFilters(appliedFilterKeys, false).catch(() => undefined);
   });
   document
     .querySelectorAll<HTMLButtonElement>("#theme-picker button")
@@ -437,7 +548,8 @@ async function main() {
 
   map.setGrid(grid.checked);
   map.setRegionGrid(regions.checked);
-  map.setMassCode(masscode.value as MassCode);
+  map.setNames(names.checked);
+  map.setGridSize(gridSize.value as MassCode);
   syncHeightUi(0);
 }
 

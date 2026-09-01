@@ -5,6 +5,10 @@ import type {
   System,
   SystemFilter,
 } from "../src/types";
+import {
+  STELLAR_OVERVIEW_LAYERS,
+  STELLAR_OVERVIEW_LAYER_BY_KEY,
+} from "../src/stellar-filter-layers";
 
 export type StellarFilterChoice = {
   key: string;
@@ -21,73 +25,19 @@ export type StellarFilterGroup = {
 export const STELLAR_FILTER_GROUPS: readonly StellarFilterGroup[] = [
   {
     label: "Scoopable",
-    choices: [
-      { key: "O", label: "O", types: ["O"] },
-      { key: "B", label: "B", types: ["B"] },
-      { key: "A", label: "A", types: ["A", "A_BlueWhiteSuperGiant"] },
-      { key: "F", label: "F", types: ["F", "F_WhiteSuperGiant"] },
-      { key: "G", label: "G", types: ["G"] },
-      { key: "K", label: "K", types: ["K", "K_OrangeGiant"] },
-      { key: "M", label: "M", types: ["M", "M_RedGiant", "M_RedSuperGiant"] },
-    ],
+    choices: STELLAR_OVERVIEW_LAYERS.slice(0, 7),
   },
   {
     label: "Not scoopable",
-    choices: [
-      { key: "L", label: "L", types: ["L"] },
-      { key: "T", label: "T", types: ["T"] },
-      { key: "Y", label: "Y", types: ["Y"] },
-      {
-        key: "proto",
-        label: "Proto",
-        description: "T Tauri + Herbig Ae/Be",
-        types: ["TTS", "AeBe"],
-      },
-      {
-        key: "carbon",
-        label: "Carbon / S-type",
-        types: ["CS", "C", "CN", "CJ", "CH", "CHd", "MS", "S"],
-      },
-      {
-        key: "wolf-rayet",
-        label: "Wolf-Rayet",
-        types: ["W", "WN", "WNC", "WC", "WO"],
-      },
-      {
-        key: "white-dwarf",
-        label: "White dwarf",
-        types: [
-          "D", "DA", "DAB", "DAO", "DAZ", "DAV", "DB", "DBZ", "DBV",
-          "DO", "DOV", "DQ", "DC", "DCV", "DX",
-        ],
-      },
-      {
-        key: "non-sequence",
-        label: "Non-sequence",
-        description: "Neutron stars + black holes",
-        types: ["N", "H", "X", "SupermassiveBlackHole"],
-      },
-    ],
+    choices: STELLAR_OVERVIEW_LAYERS.slice(7, 17),
   },
   {
     label: "Extras",
-    choices: [
-      {
-        key: "rogue-planet",
-        label: "Rogue planets",
-        description: "Unbound planetary-mass objects",
-        types: ["RoguePlanet"],
-      },
-    ],
+    choices: STELLAR_OVERVIEW_LAYERS.slice(17),
   },
 ] as const;
 
-const CHOICE_BY_KEY = new Map(
-  STELLAR_FILTER_GROUPS.flatMap(({ choices }) => choices).map((choice) => [
-    choice.key,
-    choice,
-  ]),
-);
+const CHOICE_BY_KEY = STELLAR_OVERVIEW_LAYER_BY_KEY;
 
 export function stellarTypesForFilterKeys(keys: readonly string[]): string[] {
   return [...new Set(keys.flatMap((key) => CHOICE_BY_KEY.get(key)?.types ?? []))];
@@ -201,19 +151,12 @@ function primaryFallback(system: System): StellarComponentDetails[] {
 
 function componentDetails(
   component: StellarComponentDetails,
-  primaryBodyId: number,
-  secondaryIndex: number,
+  heading?: string,
+  includeClass = true,
 ): string {
-  const primary = component.bodyId === primaryBodyId;
-  const role = component.starType === "RoguePlanet"
-    ? "Rogue planet"
-    : primary
-      ? "Primary star"
-      : `Secondary star ${secondaryIndex}`;
-  const heading = component.name ? `${role} · ${component.name}` : role;
   const orbital = component.orbitalElements;
   const rows = [
-    row("Class", detailedStellarClass(component)),
+    includeClass ? row("Class", detailedStellarClass(component)) : "",
     row("Mass", component.stellarMassSolar === undefined
       ? undefined
       : `${number(component.stellarMassSolar, 4)} solar masses`),
@@ -256,7 +199,16 @@ function componentDetails(
       ? component.rings.map(({ name, ringClass }) => `${name} (${ringClass})`).join(", ")
       : undefined),
   ].join("");
-  return `<section class="stellar-component"><h3>${escapeHtml(heading)}</h3><dl>${rows}</dl></section>`;
+  return `<section class="stellar-component">${heading
+    ? `<h3>${escapeHtml(heading)}</h3>`
+    : ""}<dl>${rows}</dl></section>`;
+}
+
+function secondaryDetails(component: StellarComponentDetails): string {
+  return `<details class="stellar-secondary">
+    <summary><strong>${escapeHtml(detailedStellarClass(component))}</strong></summary>
+    ${componentDetails(component, undefined, false)}
+  </details>`;
 }
 
 export function renderSystemDetails(system: System): string {
@@ -264,11 +216,19 @@ export function renderSystemDetails(system: System): string {
     ? system.stellarComponents
     : primaryFallback(system);
   const primaryBodyId = system.stellarPrimaryBodyId ?? components[0]?.bodyId ?? 0;
-  let secondaryIndex = 0;
-  const stellar = components.map((component) => {
-    if (component.bodyId !== primaryBodyId) secondaryIndex += 1;
-    return componentDetails(component, primaryBodyId, secondaryIndex);
-  }).join("");
+  const primary = components.find((component) => component.bodyId === primaryBodyId);
+  const secondaries = components.filter((component) => component.bodyId !== primaryBodyId);
+  const primaryHeading = primary?.starType === "RoguePlanet"
+    ? "Rogue planet"
+    : "Primary star";
+  const stellar = [
+    primary ? componentDetails(primary, primaryHeading) : "",
+    secondaries.length
+      ? `<section class="stellar-secondaries"><h3>Secondary Stars</h3>${secondaries
+          .map((component) => secondaryDetails(component))
+          .join("")}</section>`
+      : "",
+  ].join("");
   const systemRows = [
     row("ID64", system.id64 === undefined ? undefined : String(system.id64)),
     row(

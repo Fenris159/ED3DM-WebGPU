@@ -8,6 +8,7 @@ import { ED3DM } from "../src/index";
 import { containingBoxel, distanceFromSol } from "../src/boxel";
 import {
   boundedLocalSamplePlan,
+  FULL_DETAIL_CAMERA_DISTANCE_LY,
   focusedResidencyRegion,
   localEdgeScore,
   localEdgeWeight,
@@ -16,6 +17,7 @@ import {
 import {
   combinePackedBatches,
   populatePackedDisplayNames,
+  prioritizeLocalBoxelAddresses,
   resolvePegeQuery,
   thinPackedBatch,
 } from "../src/pege-worker";
@@ -28,10 +30,13 @@ import {
   unpackPegeBatch,
 } from "../src/pege-source";
 import {
+  PEGE_FILTERED_OVERVIEW_MAXIMUM_BOXELS,
   PEGE_OVERVIEW_CONFIG,
   pegeOverviewCacheId,
+  pegeStellarFilterKey,
+  pegeStellarLodForTypes,
 } from "../src/pege-overview";
-import { radialMassCodeShellPlan } from "../src/pege-tiles";
+import { radialSpatialShellPlan } from "../src/pege-tiles";
 import type {
   GalaxyRegionRequest,
   GalaxyOverviewRequest,
@@ -110,6 +115,16 @@ function packedStellarRecord(): ArrayBuffer {
 }
 
 describe("PEGE galaxy adapter", () => {
+  it("streams higher mass-code local boxels first without dropping addresses", () => {
+    const addresses = [8n, 15n, 10n, 13n, 12n];
+    const prioritized = prioritizeLocalBoxelAddresses(addresses);
+
+    expect(prioritized.map((address) => Number(address & 7n))).toEqual([
+      7, 5, 4, 2, 0,
+    ]);
+    expect(new Set(prioritized)).toEqual(new Set(addresses));
+  });
+
   it("maps successive local-detail requests into one monotonic progress range", () => {
     expect(mapDetailProgress(5, 10, { start: 0.35, end: 0.55 })).toEqual({
       phase: "detail",
@@ -145,6 +160,17 @@ describe("PEGE galaxy adapter", () => {
     ]);
   });
 
+  it("does not create a frontend System for an address outside generated population", () => {
+    const pege = {
+      resolveAddress: vi.fn(() => ({
+        status: "unknown" as const,
+        reason: "outside-generated-population" as const,
+      })),
+    };
+
+    expect(resolvePegeQuery(pege as never, "4099286239595")).toBeUndefined();
+  });
+
   it("carries every PEGE stellar component through selected-System resolution", () => {
     const pege = {
       resolveAddress: vi.fn(() => ({
@@ -175,6 +201,10 @@ describe("PEGE galaxy adapter", () => {
               displayColor: { srgb: [1, 0.9, 0.6] as const, source: "engine-palette" as const },
               provenance: "procedural-engine" as const,
               validation: "exact" as const,
+              attributeValidation: {
+                starType: "exact" as const,
+                displayColor: "estimated" as const,
+              },
             },
             {
               bodyId: 1,
@@ -184,8 +214,42 @@ describe("PEGE galaxy adapter", () => {
               subclass: 4,
               luminosityClass: "V" as const,
               stellarMassSolar: 0.3,
+              radiusMeters: 208_710_000,
+              absoluteMagnitude: 9.75,
+              luminositySolar: 0.015,
+              rotationPeriodSeconds: 86_400,
+              surfaceTemperatureKelvin: 3_200,
+              ageMyr: 4_500,
+              axialTiltRadians: 0.2,
+              distanceFromArrivalLightSeconds: 12_345,
+              orbitalElements: {
+                semiMajorAxisMeters: 1_495_978_707_000,
+                eccentricity: 0.12,
+                orbitalInclinationDegrees: 7.5,
+                periapsisDegrees: 42,
+                orbitalPeriodSeconds: 31_557_600,
+              },
+              rings: [{
+                name: "Test System B Ring",
+                ringClass: "Rocky",
+                massMegatonnes: 123,
+                innerRadiusMeters: 1_000_000,
+                outerRadiusMeters: 2_000_000,
+              }],
+              displayColor: {
+                srgb: [1, 0.5, 0.25] as const,
+                source: "blackbody-estimate" as const,
+              },
               provenance: "procedural-engine" as const,
               validation: "exact" as const,
+              attributeValidation: {
+                starType: "observed" as const,
+                stellarMassSolar: "exact" as const,
+                radiusMeters: "estimated" as const,
+                surfaceTemperatureKelvin: "observed" as const,
+                luminositySolar: "estimated" as const,
+                displayColor: "estimated" as const,
+              },
             },
           ],
         },
@@ -195,8 +259,67 @@ describe("PEGE galaxy adapter", () => {
     expect(resolvePegeQuery(pege as never, "42")).toEqual(
       expect.objectContaining({
         stellarComponents: [
-          expect.objectContaining({ bodyId: 0, starType: "G", subclass: 2 }),
-          expect.objectContaining({ bodyId: 1, name: "Test System B", starType: "M" }),
+          expect.objectContaining({
+            bodyId: 0,
+            starType: "G",
+            subclass: 2,
+            displayColor: {
+              srgb: [1, 0.9, 0.6],
+              source: "engine-palette",
+            },
+            stellarColor: "#ffe699",
+            provenance: "procedural-engine",
+            attributeValidation: {
+              starType: "exact",
+              displayColor: "estimated",
+            },
+          }),
+          expect.objectContaining({
+            bodyId: 1,
+            name: "Test System B",
+            parents: [{ bodyType: "Null", bodyId: 0 }],
+            starType: "M",
+            subclass: 4,
+            luminosityClass: "V",
+            stellarMassSolar: 0.3,
+            radiusMeters: 208_710_000,
+            absoluteMagnitude: 9.75,
+            luminositySolar: 0.015,
+            rotationPeriodSeconds: 86_400,
+            surfaceTemperatureKelvin: 3_200,
+            ageMyr: 4_500,
+            axialTiltRadians: 0.2,
+            distanceFromArrivalLightSeconds: 12_345,
+            orbitalElements: {
+              semiMajorAxisMeters: 1_495_978_707_000,
+              eccentricity: 0.12,
+              orbitalInclinationDegrees: 7.5,
+              periapsisDegrees: 42,
+              orbitalPeriodSeconds: 31_557_600,
+            },
+            rings: [{
+              name: "Test System B Ring",
+              ringClass: "Rocky",
+              massMegatonnes: 123,
+              innerRadiusMeters: 1_000_000,
+              outerRadiusMeters: 2_000_000,
+            }],
+            displayColor: {
+              srgb: [1, 0.5, 0.25],
+              source: "blackbody-estimate",
+            },
+            stellarColor: "#ff8040",
+            provenance: "procedural-engine",
+            validation: "exact",
+            attributeValidation: {
+              starType: "observed",
+              stellarMassSolar: "exact",
+              radiusMeters: "estimated",
+              surfaceTemperatureKelvin: "observed",
+              luminositySolar: "estimated",
+              displayColor: "estimated",
+            },
+          }),
         ],
       }),
     );
@@ -209,11 +332,140 @@ describe("PEGE galaxy adapter", () => {
       targetSystems: 50_000,
       selectionSeed: "42",
       stellarLod: { mode: "presentation-balanced", strength: 1 },
-      compositionVersion: "pege-final-systems-v2-display-names",
+      compositionVersion: "pege-final-systems-v4-direct-classification",
     });
     expect(pegeOverviewCacheId("/pege-runtime.bin", "https://example.test/map")).toBe(
-      `pege-1.7-spatial-v4:https://example.test/pege-runtime.bin:${GALAXY_SPATIAL_SELECTION_VERSION}:50000:42:presentation-balanced:1:-1280000,-160000,-451200:1283200,160000,2112000:pege-final-systems-v2-display-names`,
+      `pege-1.8-stellar-v2-direct-spatial-v10:https://example.test/pege-runtime.bin:${GALAXY_SPATIAL_SELECTION_VERSION}:50000:42:presentation-balanced:1:-1280000,-160000,-451200:1283200,160000,2112000:pege-final-systems-v4-direct-classification`,
     );
+    expect(
+      pegeOverviewCacheId(
+        "/pege-runtime.bin",
+        "https://example.test/map",
+        ["T"],
+      ),
+    ).toContain(":T:20000:");
+    expect(pegeStellarFilterKey(["T", "L", "T"])).toBe("L,T");
+    expect(pegeStellarLodForTypes(["T"])).toMatchObject({
+      mode: "class-weighted",
+      retention: { T: 1, G: 0, N: 0 },
+      unknownRetention: 0,
+      strength: 1,
+    });
+  });
+
+  it("requests a fresh full-capacity overview for selected stellar classes", async () => {
+    const worker = new FakePegeWorker();
+    const source = new PegeGalaxySource({
+      runtimeUrl: "/pege-runtime.bin?v=1.8.0",
+      worker: worker as unknown as Worker,
+    });
+
+    const loading = source.loadOverview({ lod: 20, stellarTypes: ["T"] });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    const request = worker.messages[1] as { requestId: number };
+    expect(request).toMatchObject({
+      type: "overview",
+      targetSystems: PEGE_OVERVIEW_CONFIG.targetSystems,
+      maximumBoxelsVisited: PEGE_FILTERED_OVERVIEW_MAXIMUM_BOXELS,
+      stellarLod: {
+        mode: "class-weighted",
+        retention: { T: 1, G: 0, N: 0 },
+        unknownRetention: 0,
+      },
+    });
+    expect(request).not.toHaveProperty("massCodes");
+    worker.emit({ type: "complete", requestId: request.requestId });
+    await expect(loading).resolves.toEqual({ systems: [] });
+    source.destroy();
+  });
+
+  it("applies the selected stellar classes to spatial tiles and their cache identity", async () => {
+    const worker = new FakePegeWorker();
+    const onProgress = vi.fn();
+    const source = new PegeGalaxySource({
+      runtimeUrl: "/pege-runtime.bin?v=1.8.0",
+      worker: worker as unknown as Worker,
+      onProgress,
+    });
+    const key = { level: 0, x: 0, y: 0, z: 0 } as const;
+    const loading = source.loadSpatialTiles!({
+      keys: [key],
+      totalTargetSystems: 50_000,
+      stellarTypes: ["T"],
+      detailProgressRange: { start: 0.08, end: 0.2 },
+    });
+    await Promise.resolve();
+    const planRequest = worker.messages[1] as { requestId: number };
+    worker.emit({
+      type: "progress",
+      requestId: planRequest.requestId,
+      phase: "detail",
+      completed: 1,
+      total: 2,
+    });
+    expect(onProgress).toHaveBeenLastCalledWith({
+      phase: "detail",
+      completed: expect.closeTo(0.086, 5),
+      total: 1,
+    });
+    worker.emit({
+      type: "tile-plan",
+      requestId: planRequest.requestId,
+      tiles: [{
+        key,
+        keyString: "0/0/0/0",
+        targetSystems: 50_000,
+        populationWeight: 1,
+      }],
+    });
+    await Promise.resolve();
+    const tileRequest = worker.messages[2] as { requestId: number };
+    expect(tileRequest).toMatchObject({
+      type: "tiles",
+      tiles: [{ maximumBoxelsVisited: expect.any(Number) }],
+      stellarLod: {
+        mode: "class-weighted",
+        retention: { T: 1, G: 0, N: 0 },
+        unknownRetention: 0,
+      },
+    });
+    expect(tileRequest).not.toHaveProperty("massCodes");
+    const maximumBoxelsVisited = (tileRequest as unknown as {
+      tiles: { maximumBoxelsVisited: number }[];
+    }).tiles[0]!.maximumBoxelsVisited;
+    expect(maximumBoxelsVisited).toBeGreaterThan(0);
+    expect(maximumBoxelsVisited).toBeLessThanOrEqual(4_096);
+    worker.emit({ type: "complete", requestId: tileRequest.requestId });
+    await expect(loading).resolves.toHaveLength(1);
+    source.destroy();
+  });
+
+  it("uses canonical population classes for special-class spatial tiles", async () => {
+    const worker = new FakePegeWorker();
+    const source = new PegeGalaxySource({
+      runtimeUrl: "/pege-runtime.bin?v=1.8.0",
+      worker: worker as unknown as Worker,
+    });
+    const key = { level: 0, x: 0, y: 0, z: 0 } as const;
+    const loading = source.loadSpatialTiles!({
+      keys: [key],
+      totalTargetSystems: 50_000,
+      stellarTypes: ["D"],
+    });
+    await Promise.resolve();
+    const tileRequest = worker.messages[1] as {
+      type: string;
+      requestId: number;
+      attributes?: string;
+      tiles: { maximumBoxelsVisited?: number }[];
+    };
+    expect(tileRequest.type).toBe("tiles");
+    expect(tileRequest.attributes).toBe("spatial-primary-render");
+    expect(tileRequest.tiles[0]!.maximumBoxelsVisited).toBeGreaterThan(0);
+    expect(tileRequest.tiles[0]!.maximumBoxelsVisited).toBeLessThanOrEqual(4_096);
+    worker.emit({ type: "complete", requestId: tileRequest.requestId });
+    await expect(loading).resolves.toHaveLength(1);
+    source.destroy();
   });
 
   it("accepts PEGE's final authored-name stream as one LOD population", async () => {
@@ -311,6 +563,45 @@ describe("PEGE galaxy adapter", () => {
 
     galaxyWorker.emit({ type: "complete", requestId: galaxyRequest.requestId });
     await expect(generating).resolves.toEqual([]);
+    source.destroy();
+  });
+
+  it("publishes factual local batches before exact region enumeration completes", async () => {
+    const worker = new FakePegeWorker();
+    const onPartialSystems = vi.fn();
+    const source = new PegeGalaxySource({
+      runtimeUrl: "/pege-runtime.bin?v=1.5.0",
+      worker: worker as unknown as Worker,
+    });
+
+    const loading = source.loadRegion({
+      center: { x: 0, y: 0, z: 0 },
+      radiusLy: 80,
+      bounds: {
+        minimum: { x: -80, y: -80, z: -80 },
+        maximum: { x: 80, y: 80, z: 80 },
+      },
+      cameraDistanceLy: 285,
+      lod: "all",
+      onPartialSystems,
+    });
+    const request = worker.messages[1] as { requestId: number };
+    worker.emit({
+      type: "batch",
+      requestId: request.requestId,
+      batch: {
+        records: packedRecord(),
+        names: [{ systemIndex: 0, name: "Early factual System" }],
+      },
+    } as PegeWorkerResponse);
+
+    expect(onPartialSystems).toHaveBeenCalledWith([
+      expect.objectContaining({ name: "Early factual System" }),
+    ]);
+    worker.emit({ type: "complete", requestId: request.requestId });
+    await expect(loading).resolves.toEqual([
+      expect.objectContaining({ name: "Early factual System" }),
+    ]);
     source.destroy();
   });
 
@@ -422,6 +713,7 @@ describe("PEGE galaxy adapter", () => {
       populationWeight: index + 0.5,
     }));
 
+    const onPartialTiles = vi.fn();
     const firstLoad = source.loadSpatialTiles!({
       keys,
       totalTargetSystems: 3,
@@ -430,6 +722,7 @@ describe("PEGE galaxy adapter", () => {
         { key: keys[0], weight: 1 },
         { key: keys[1], weight: 0.25 },
       ],
+      onPartialTiles,
     });
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     const firstPlanRequest = worker.messages[1] as { requestId: number };
@@ -451,7 +744,12 @@ describe("PEGE galaxy adapter", () => {
       expect.objectContaining({
         type: "tiles",
         requestId: 2,
-        tiles: plan.map(({ key, targetSystems }) => ({ key, targetSystems })),
+        tiles: plan.map(({ key, targetSystems }) => ({
+          key,
+          targetSystems,
+          sampleTargetSystems: 1,
+          voxelResolution: 4,
+        })),
         selectionSeed: "42",
       }),
     );
@@ -467,11 +765,31 @@ describe("PEGE galaxy adapter", () => {
           names: [{ systemIndex: 0, name: tile.keyString }],
         },
       });
+      worker.emit({
+        type: "tile-density",
+        requestId: tileRequest.requestId,
+        tileKey: tile.key,
+        tileKeyString: tile.keyString,
+        density: {
+          densityVersion: 1,
+          voxelResolution: 4,
+          sourceSystemCount: tile.targetSystems,
+          centroidFixedXyz: new Float32Array([32, 64, 96]).buffer,
+          voxelSystemCounts: new Uint32Array([tile.targetSystems]).buffer,
+        },
+      });
     }
     worker.emit({ type: "complete", requestId: tileRequest.requestId });
     const first = await firstLoad;
+    expect(onPartialTiles.mock.calls.some(([tiles]) =>
+      tiles.some(({ systems }: GalaxySpatialTile) => systems.length > 0),
+    )).toBe(true);
     expect(first.map(({ key }) => key)).toEqual(plan.map(({ keyString }) => keyString));
     expect(first.map(({ systems }) => systems.length)).toEqual([1, 1]);
+    expect(first.map(({ densityCells }) => densityCells)).toEqual([
+      [{ coords: { x: 1, y: 2, z: 3 }, genuineSystemCount: 1 }],
+      [{ coords: { x: 1, y: 2, z: 3 }, genuineSystemCount: 2 }],
+    ]);
 
     const secondLoad = source.loadSpatialTiles!({
       keys,
@@ -584,7 +902,7 @@ describe("PEGE galaxy adapter", () => {
     });
     expect(onProgress).toHaveBeenLastCalledWith({
       phase: "detail",
-      completed: 0.35,
+      completed: 0.37,
       total: 1,
     });
 
@@ -678,8 +996,12 @@ describe("PEGE galaxy adapter", () => {
   it("bounds PEGE boxel generation without lowering the requested System sample", () => {
     expect(maximumBoxelsForView(100)).toBeUndefined();
     expect(maximumBoxelsForView(180)).toBeUndefined();
-    expect(maximumBoxelsForView(301)).toBe(2_048);
-    expect(maximumBoxelsForView(6_000)).toBe(2_048);
+    expect(maximumBoxelsForView(301)).toBe(8);
+    expect(maximumBoxelsForView(600)).toBe(8);
+    expect(maximumBoxelsForView(601)).toBe(6);
+    expect(maximumBoxelsForView(1_601)).toBe(4);
+    expect(maximumBoxelsForView(4_001)).toBe(2);
+    expect(maximumBoxelsForView(6_000)).toBe(2);
     expect(boundedLocalSamplePlan(2_000, 4_096, 0.03)).toEqual({
       boxelThreshold: 1,
       systemThreshold: 0.03,
@@ -690,13 +1012,15 @@ describe("PEGE galaxy adapter", () => {
     expect(plan.boxelThreshold * plan.systemThreshold).toBeCloseTo(0.003);
   });
 
-  it("uses zoom for population composition and LOD only for stable thinning", () => {
-    expect(massCodesForView(40_000, 0)).toEqual([7]);
-    expect(massCodesForView(40_000, 50)).toEqual([7]);
-    expect(massCodesForView(40_000, 100)).toEqual([7]);
+  it("keeps spatial coverage independent from the selected mass-code population", () => {
+    expect(massCodesForView(40_000, 0)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+    expect(massCodesForView(40_000, 50)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+    expect(massCodesForView(40_000, 100)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
     expect(massCodesForView(100, 0)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
     expect(massCodesForView(285, "all")).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
-    expect(massCodesForView(40_000, "all")).toEqual([7]);
+    expect(massCodesForView(40_000, "all")).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+    expect(massCodesForView(40_000, "all", [3])).toEqual([3]);
+    expect(massCodesForView(100, 0, [0, 1, 2, 3])).toEqual([0, 1, 2, 3]);
     expect(thresholdForView(40_000, 0)).toBeCloseTo(0.0000001);
     expect(thresholdForView(40_000, 20)).toBeCloseTo(0.000000136);
     expect(thresholdForView(100, 0)).toBe(1);
@@ -816,7 +1140,6 @@ describe("PEGE galaxy adapter", () => {
       resolveDisplayName: vi.fn(async () => "Sol"),
       destroy: vi.fn(),
     };
-
     const map = await ED3DM.create({ container: document.body, source, lod: 10 });
     expect(map.visibleSystems().map((system) => system.name)).toEqual([
       "Far overview System",
@@ -873,6 +1196,44 @@ describe("PEGE galaxy adapter", () => {
       "View 4",
       "View 5",
     ]);
+    map.destroy();
+  });
+
+  it("reloads the canonical PEGE overview when a stellar filter changes", async () => {
+    const allSystem: System = {
+      name: "All-sample G star",
+      id64: "1",
+      coords: { x: 0, y: 0, z: 0 },
+      generation: "ordinary",
+      stellarType: "G",
+    };
+    const tSystem: System = {
+      name: "Filtered T star",
+      id64: "2",
+      coords: { x: 1, y: 0, z: 0 },
+      generation: "ordinary",
+      stellarType: "T",
+    };
+    const loadOverview = vi.fn(async (request: GalaxyOverviewRequest) => ({
+      systems: request.stellarTypes?.includes("T") ? [tSystem] : [allSystem],
+    }));
+    const source: GalaxySource = {
+      loadOverview,
+      loadRegion: vi.fn(async () => []),
+      resolve: vi.fn(async () => undefined),
+      suggest: vi.fn(async () => []),
+      resolveDisplayName: vi.fn(async () => undefined),
+      destroy: vi.fn(),
+    };
+
+    const map = await ED3DM.create({ container: document.body, source, lod: 20 });
+    await map.setFilter({ stellarTypes: ["T"] });
+    expect(map.visibleSystems()).toEqual([tSystem]);
+    expect(loadOverview).toHaveBeenCalledTimes(2);
+    expect(loadOverview).toHaveBeenLastCalledWith(
+      { lod: 20, stellarTypes: ["T"] },
+      expect.any(AbortSignal),
+    );
     map.destroy();
   });
 
@@ -939,7 +1300,7 @@ describe("PEGE galaxy adapter", () => {
     map.destroy();
   });
 
-  it("keeps exact local Systems and complete radial h/g/f/e detail resident together", async () => {
+  it("keeps selected neighbors and complete radial h/g/f/e detail resident together", async () => {
     const overview: System = {
       name: "Overview",
       id64: "1",
@@ -1019,15 +1380,16 @@ describe("PEGE galaxy adapter", () => {
       request: GalaxySpatialTileRequest,
       signal?: AbortSignal,
     ) => {
-      if (spatialCall >= 8) {
+      if (spatialCall >= 10) {
         spatialCall += 1;
         blockedSignal = signal;
         return await new Promise<GalaxySpatialTile[]>((resolve) => {
           releaseBlocked = resolve;
         });
       }
-      const batch = Math.floor(spatialCall / 4);
-      const system = spatialBatches[batch]![spatialCall++ % 4]!;
+      const batch = Math.floor(spatialCall / 5);
+      const shellIndex = [0, 0, 1, 2, 3][spatialCall++ % 5]!;
+      const system = spatialBatches[batch]![shellIndex]!;
       return [{
         key: `${request.keys[0]!.level}/${request.keys[0]!.x}/${request.keys[0]!.y}/${request.keys[0]!.z}`,
         tileKey: request.keys[0]!,
@@ -1036,22 +1398,7 @@ describe("PEGE galaxy adapter", () => {
         systems: [system],
       }];
     });
-    let blockNextRegion = false;
-    let blockedRegionSignal: AbortSignal | undefined;
-    let releaseBlockedRegion: (() => void) | undefined;
-    const loadRegion = vi.fn(async (
-      _request: GalaxyRegionRequest,
-      signal?: AbortSignal,
-    ) => {
-      if (blockNextRegion) {
-        blockNextRegion = false;
-        blockedRegionSignal = signal;
-        await new Promise<void>((resolve) => {
-          releaseBlockedRegion = resolve;
-        });
-      }
-      return [target, exactNeighbor];
-    });
+    const loadRegion = vi.fn(async (_request: GalaxyRegionRequest) => [target, exactNeighbor]);
     const source: GalaxySource = {
       loadOverview: vi.fn(async () => ({ systems: [overview] })),
       loadRegion,
@@ -1070,7 +1417,7 @@ describe("PEGE galaxy adapter", () => {
       onDetailRendered,
     });
     await map.flyTo(target.name);
-    await vi.waitFor(() => expect(loadSpatialTiles).toHaveBeenCalledTimes(4));
+    await vi.waitFor(() => expect(loadSpatialTiles).toHaveBeenCalledTimes(5));
     await vi.waitFor(() => expect(onDetailRendered).toHaveBeenCalledTimes(1));
     await vi.waitFor(() =>
       expect(map.visibleSystems().map(({ name }) => name)).toEqual(
@@ -1085,22 +1432,28 @@ describe("PEGE galaxy adapter", () => {
         ]),
       ),
     );
-    const shells = radialMassCodeShellPlan(target.coords);
+    const shells = radialSpatialShellPlan(target.coords);
     expect(loadSpatialTiles.mock.calls.map(([request]) => request.keys.length))
-      .toEqual(shells.map(({ keys }) => keys.length));
+      .toEqual([
+        shells[0]!.keys.length,
+        ...shells.map(({ keys }) => keys.length),
+      ]);
     expect(loadSpatialTiles.mock.calls.every(([request]) =>
       request.keyWeights === undefined,
     )).toBe(true);
-    expect(loadSpatialTiles.mock.calls.map(([request]) => request.totalTargetSystems))
-      .toEqual([...loadSpatialTiles.mock.calls]
-        .map(([request]) => request.totalTargetSystems)
-        .sort((a, b) => b - a));
+    const targetRequests = loadSpatialTiles.mock.calls.map(
+      ([request]) => request.totalTargetSystems,
+    );
+    expect(targetRequests[0]).toBeLessThan(targetRequests[1]!);
+    expect(targetRequests.slice(1)).toEqual(
+      [...targetRequests.slice(1)].sort((a, b) => b - a),
+    );
     expect(loadSpatialTiles.mock.calls.map(([request]) => request.keys))
-      .toEqual(shells.map(({ keys }) => keys));
+      .toEqual([shells[0]!.keys, ...shells.map(({ keys }) => keys)]);
     const progressRanges = loadSpatialTiles.mock.calls.map(
       ([tileRequest]) => tileRequest.detailProgressRange!,
     );
-    expect(progressRanges[0]?.start).toBeCloseTo(0.35);
+    expect(progressRanges[0]?.start).toBe(0.08);
     expect(progressRanges.at(-1)?.end).toBe(1);
     expect(
       progressRanges.every(
@@ -1108,12 +1461,21 @@ describe("PEGE galaxy adapter", () => {
           index === 0 || range.start >= progressRanges[index - 1]!.end,
       ),
     ).toBe(true);
+    expect(
+      loadRegion.mock.calls
+        .filter(([request]) =>
+          request.onPartialSystems !== undefined &&
+          request.detailProgressRange !== undefined &&
+          request.detailProgressRange.end <= 0.08)
+        .map(([request]) => request.bounds!.maximum.x - request.bounds!.minimum.x)
+        .slice(-1),
+    ).toEqual([10]);
 
     await map.setLod("all");
-    expect(loadSpatialTiles).toHaveBeenCalledTimes(4);
+    expect(loadSpatialTiles).toHaveBeenCalledTimes(5);
     map.clearSelection();
     await map.focus({ x: 110, y: 0, z: 0 });
-    expect(loadSpatialTiles).toHaveBeenCalledTimes(8);
+    expect(loadSpatialTiles).toHaveBeenCalledTimes(10);
     await vi.waitFor(() => expect(onDetailRendered).toHaveBeenCalledTimes(2));
     expect(map.visibleSystems().map(({ name }) => name)).toEqual(
       expect.arrayContaining(replacementNeighbors.map(({ name }) => name)),
@@ -1121,24 +1483,13 @@ describe("PEGE galaxy adapter", () => {
     expect(map.visibleSystems().map(({ name }) => name)).not.toContain("H neighbor");
 
     const leavingCommittedArea = map.focus({ x: 120, y: 0, z: 0 });
-    await vi.waitFor(() => expect(loadSpatialTiles).toHaveBeenCalledTimes(9));
+    await vi.waitFor(() => expect(loadSpatialTiles).toHaveBeenCalledTimes(11));
     await map.focus({ x: 110, y: 0, z: 0 });
     expect(blockedSignal?.aborted).toBe(true);
     releaseBlocked?.([]);
     await leavingCommittedArea;
     await vi.waitFor(() => expect(onDetailRendered).toHaveBeenCalledTimes(3));
 
-    blockNextRegion = true;
-    const priorRegionCalls = loadRegion.mock.calls.length;
-    const leavingDuringExactDetail = map.focus({ x: 5_000, y: 0, z: 0 });
-    await vi.waitFor(() =>
-      expect(loadRegion).toHaveBeenCalledTimes(priorRegionCalls + 1),
-    );
-    await map.focus({ x: 110, y: 0, z: 0 });
-    expect(blockedRegionSignal?.aborted).toBe(true);
-    releaseBlockedRegion?.();
-    await leavingDuringExactDetail;
-    await vi.waitFor(() => expect(onDetailRendered).toHaveBeenCalledTimes(4));
     map.destroy();
   });
 
@@ -1229,13 +1580,12 @@ describe("PEGE galaxy adapter", () => {
       { name: "Sol", id64: "10477373803", coords: { x: 0, y: 0, z: 0 } },
     ]);
     await map.flyTo("Sol");
-    const distance = Math.hypot(22, 14, 52);
-    const residency = focusedResidencyRegion({ x: 0, y: 0, z: 0 }, distance);
     expect(loadRegion).toHaveBeenCalledWith(
       expect.objectContaining({
-        center: residency.center,
-        radiusLy: residency.radiusLy,
-        cameraDistanceLy: distance,
+        center: systems[0]!.coords,
+        radiusLy: 5,
+        cameraDistanceLy: FULL_DETAIL_CAMERA_DISTANCE_LY,
+        lod: "all",
       }),
       expect.any(AbortSignal),
     );
@@ -1246,7 +1596,7 @@ describe("PEGE galaxy adapter", () => {
   it("keeps one complete local cache zone stable throughout the closest zoom range", () => {
     const near = focusedResidencyRegion({ x: 0, y: 0, z: 0 }, 58);
     const threshold = focusedResidencyRegion({ x: 0, y: 0, z: 0 }, 285);
-    expect(near.maximum.x - near.minimum.x).toBe(640);
+    expect(near.maximum.x - near.minimum.x).toBe(160);
     expect(threshold.key).toBe(near.key);
   });
 });

@@ -9,11 +9,11 @@ describe("reference palettes", () => {
   });
 
   it("uses a compact monotonic scale for stellar radius", () => {
-    expect(orbScale(undefined)).toBe(90);
-    expect(orbScale(0)).toBe(90);
-    expect(orbScale(695_700_000)).toBe(90);
+    expect(orbScale(undefined)).toBe(110);
+    expect(orbScale(0)).toBe(110);
+    expect(orbScale(695_700_000)).toBe(110);
     expect(orbScale(6_957_000_000)).toBeGreaterThan(orbScale(695_700_000));
-    expect(orbScale(6_957_000_000)).toBeLessThanOrEqual(260);
+    expect(orbScale(6_957_000_000)).toBeLessThanOrEqual(300);
   });
 
   it("lets distant stars become sub-pixel points instead of an opaque ball", () => {

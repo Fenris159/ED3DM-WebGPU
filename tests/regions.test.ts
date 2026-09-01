@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { ED3DM } from "../src/index";
-import { BOXEL_ORIGIN, onBoxelLattice } from "../src/boxel";
+import { onBoxelLattice } from "../src/boxel";
 import {
   GALACTIC_REGIONS,
   GALAXY_CORE,
@@ -70,11 +70,11 @@ describe("Codex region grid", () => {
     expect(REGION_GRID_XZ.length / 4).toBeGreaterThan(1000);
   });
 
-  it("snaps every outline vertex onto the 10 ly a-grid", () => {
+  it("snaps every outline vertex onto the Sol-aligned 10 ly map grid", () => {
     const snapped = snapRegionOutline([10517, -22032, 10912, -22032]);
-    expect(snapped[0]).toBe(10515);
-    expect(snapped[2]).toBe(10915);
-    expect(onBoxelLattice(snapped[1]!, BOXEL_ORIGIN.z, 10)).toBe(true);
+    expect(snapped[0]).toBe(10520);
+    expect(snapped[2]).toBe(10910);
+    expect(onBoxelLattice(snapped[1]!, 0, 10)).toBe(true);
     expect(snapRegionOutline([5, -5, 5, -5])).toEqual([]);
     let off = 0;
     let collapsed = 0;
@@ -83,10 +83,10 @@ describe("Codex region grid", () => {
       const z1 = REGION_GRID_XZ[i + 1]!;
       const x2 = REGION_GRID_XZ[i + 2]!;
       const z2 = REGION_GRID_XZ[i + 3]!;
-      if (!onBoxelLattice(x1, BOXEL_ORIGIN.x, 10)) off += 1;
-      if (!onBoxelLattice(z1, BOXEL_ORIGIN.z, 10)) off += 1;
-      if (!onBoxelLattice(x2, BOXEL_ORIGIN.x, 10)) off += 1;
-      if (!onBoxelLattice(z2, BOXEL_ORIGIN.z, 10)) off += 1;
+      if (!onBoxelLattice(x1, 0, 10)) off += 1;
+      if (!onBoxelLattice(z1, 0, 10)) off += 1;
+      if (!onBoxelLattice(x2, 0, 10)) off += 1;
+      if (!onBoxelLattice(z2, 0, 10)) off += 1;
       if (x1 === x2 && z1 === z2) collapsed += 1;
     }
     expect(off).toBe(0);

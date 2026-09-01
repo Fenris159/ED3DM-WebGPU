@@ -1,15 +1,18 @@
 import {
   GALAXY_SPATIAL_SELECTION_VERSION,
+  GALAXY_DENSITY_TILE_VERSION,
   GALAXY_SYSTEM_STRIDE_BYTES,
   STELLAR_SYSTEM_ATTRIBUTE_STRIDE_BYTES,
   STELLAR_TYPES,
   GalaxySystemFlags,
   StellarSystemAttributeFlags,
   galaxyViewTileKeyString,
+  type StellarLodPolicy,
 } from "pege";
 import type {
   GalaxyLoadProgress,
   GalaxyDetailProgressRange,
+  GalaxyDensityCell,
   GalaxyOverview,
   GalaxyOverviewRequest,
   GalaxyRegionRequest,
@@ -23,6 +26,7 @@ import type {
 } from "./types";
 import type {
   PackedSystemBatch,
+  PackedDensityBatch,
   PegeWorkerRequest,
   PegeWorkerResponse,
 } from "./pege-protocol";
@@ -31,7 +35,14 @@ import {
   localEdgeScore,
   localEdgeWeight,
 } from "./lod";
-import { PEGE_OVERVIEW_CONFIG, pegeOverviewCacheId } from "./pege-overview";
+import {
+  PEGE_FILTERED_OVERVIEW_MAXIMUM_BOXELS,
+  PEGE_OVERVIEW_CONFIG,
+  pegeOverviewCacheId,
+  pegeFilterUsesOnlyIndexedSpecialClasses,
+  pegeStellarFilterKey,
+  pegeStellarLodForTypes,
+} from "./pege-overview";
 
 function openOverviewCache(): Promise<IDBDatabase | undefined> {
   if (typeof indexedDB === "undefined") return Promise.resolve(undefined);
@@ -49,6 +60,7 @@ function openOverviewCache(): Promise<IDBDatabase | undefined> {
 
 async function readOverviewCache(
   runtimeUrl: string,
+  stellarTypes?: readonly string[],
 ): Promise<GalaxyOverview | undefined> {
   const database = await openOverviewCache();
   if (!database) return undefined;
@@ -56,7 +68,7 @@ async function readOverviewCache(
     const request = database
       .transaction("galaxy", "readonly")
       .objectStore("galaxy")
-      .get(pegeOverviewCacheId(runtimeUrl));
+      .get(pegeOverviewCacheId(runtimeUrl, location.href, stellarTypes));
     request.onsuccess = () => resolve(request.result as GalaxyOverview | undefined);
     request.onerror = () => resolve(undefined);
   }).finally(() => database.close());
@@ -65,6 +77,7 @@ async function readOverviewCache(
 async function writeOverviewCache(
   runtimeUrl: string,
   overview: GalaxyOverview,
+  stellarTypes?: readonly string[],
 ): Promise<void> {
   const database = await openOverviewCache();
   if (!database) return;
@@ -72,7 +85,7 @@ async function writeOverviewCache(
     const transaction = database.transaction("galaxy", "readwrite");
     transaction
       .objectStore("galaxy")
-      .put(overview, pegeOverviewCacheId(runtimeUrl));
+      .put(overview, pegeOverviewCacheId(runtimeUrl, location.href, stellarTypes));
     transaction.oncomplete = () => resolve();
     transaction.onerror = () => resolve();
     transaction.onabort = () => resolve();
@@ -83,10 +96,12 @@ async function writeOverviewCache(
 type GeneratePending = {
   kind: "generate";
   systems: System[];
+  onBatch?: (systems: readonly System[]) => void;
   resolve: (overview: GalaxyOverview) => void;
   reject: (error: Error) => void;
   detachAbort?: () => void;
   detailProgressRange?: GalaxyDetailProgressRange;
+  suppressProgress?: boolean;
 };
 
 type ValuePending = {
@@ -94,19 +109,73 @@ type ValuePending = {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
   detachAbort?: () => void;
+  detailProgressRange?: GalaxyDetailProgressRange;
 };
 
 type TilePlan = Extract<PegeWorkerResponse, { type: "tile-plan" }>["tiles"];
+
+function uniformTilePlan(
+  keys: readonly GalaxySpatialTileRequest["keys"][number][],
+  totalTargetSystems: number,
+): TilePlan {
+  if (keys.length === 0) return [];
+  const total = Math.max(0, Math.floor(totalTargetSystems));
+  const baseline = Math.floor(total / keys.length);
+  const remainder = total % keys.length;
+  return keys.map((key, index) => ({
+    key,
+    keyString: galaxyViewTileKeyString(key),
+    targetSystems: baseline + Number(index < remainder),
+    populationWeight: 1,
+  }));
+}
 
 type TilesPending = {
   kind: "tiles";
   plan: TilePlan;
   systemsByKey: Map<string, System[]>;
+  densityByKey: Map<string, GalaxyDensityCell[]>;
   resolve: (tiles: GalaxySpatialTile[]) => void;
   reject: (error: Error) => void;
   detachAbort?: () => void;
   detailProgressRange?: GalaxyDetailProgressRange;
+  onPartialTiles?: (tiles: readonly GalaxySpatialTile[]) => void;
 };
+
+const DENSITY_TILE_SAMPLE_FRACTION = 0.2;
+const DENSITY_TILE_VOXEL_RESOLUTION = 4;
+export const PEGE_FILTERED_SPATIAL_MAXIMUM_BOXELS = 4_096;
+
+export function filteredSpatialBoxelBudgets(
+  plan: readonly { targetSystems: number }[],
+  totalMaximum?: number,
+): number[] {
+  if (plan.length === 0) return [];
+  const totalTargets = plan.reduce(
+    (sum, tile) => sum + Math.max(0, tile.targetSystems),
+    0,
+  );
+  const requestedMaximum = totalMaximum ?? Math.min(
+    PEGE_FILTERED_SPATIAL_MAXIMUM_BOXELS,
+    Math.max(256, Math.ceil(Math.sqrt(totalTargets) * 8)),
+  );
+  const maximum = Math.max(plan.length, Math.floor(requestedMaximum));
+  const shares = plan.map((tile) =>
+    totalTargets === 0
+      ? maximum / plan.length
+      : maximum * Math.max(0, tile.targetSystems) / totalTargets
+  );
+  const budgets = shares.map((share) => Math.max(1, Math.floor(share)));
+  let remaining = maximum - budgets.reduce((sum, budget) => sum + budget, 0);
+  for (const { index } of shares
+    .map((share, index) => ({ index, remainder: share - Math.floor(share) }))
+    .sort((left, right) => right.remainder - left.remainder || left.index - right.index)) {
+    if (remaining <= 0) break;
+    budgets[index]! += 1;
+    remaining -= 1;
+  }
+  return budgets;
+}
 
 type Pending = GeneratePending | ValuePending | TilesPending;
 
@@ -152,9 +221,19 @@ function fieldValidation(
 }
 
 export function massCodesForView(
-  cameraDistanceLy: number,
+  _cameraDistanceLy: number,
   _lod: LodSetting,
+  requested?: readonly number[],
 ): number[] {
+  if (requested?.length) {
+    return [...new Set(requested)]
+      .filter((code) => Number.isInteger(code) && code >= 0 && code <= 7)
+      .sort((left, right) => left - right);
+  }
+  return [0, 1, 2, 3, 4, 5, 6, 7];
+}
+
+function detailLevelForDistance(cameraDistanceLy: number): number {
   const distance = Math.max(0, cameraDistanceLy);
   const baseMinimum =
     distance >= 30_000
@@ -172,17 +251,14 @@ export function massCodesForView(
                 : distance > FULL_DETAIL_CAMERA_DISTANCE_LY
                   ? 1
                   : 0;
-  return Array.from(
-    { length: 8 - baseMinimum },
-    (_, index) => baseMinimum + index,
-  );
+  return baseMinimum;
 }
 
 export function thresholdForView(
   cameraDistanceLy: number,
   lod: LodSetting,
 ): number {
-  const [minimum = 7] = massCodesForView(cameraDistanceLy, 0);
+  const minimum = detailLevelForDistance(cameraDistanceLy);
   const maximumThreshold =
     [1, 0.03, 0.003, 0.0003, 0.00003, 0.00001, 0.000003, 0.000001][
       minimum
@@ -199,9 +275,11 @@ export function thresholdForView(
 export function maximumBoxelsForView(
   cameraDistanceLy: number,
 ): number | undefined {
-  return cameraDistanceLy <= FULL_DETAIL_CAMERA_DISTANCE_LY
-    ? undefined
-    : 2_048;
+  if (cameraDistanceLy <= FULL_DETAIL_CAMERA_DISTANCE_LY) return undefined;
+  if (cameraDistanceLy <= 600) return 8;
+  if (cameraDistanceLy <= 1_600) return 6;
+  if (cameraDistanceLy <= 4_000) return 4;
+  return 2;
 }
 
 export function unpackPegeBatch(batch: PackedSystemBatch): System[] {
@@ -319,6 +397,22 @@ export function unpackPegeBatch(batch: PackedSystemBatch): System[] {
   return systems;
 }
 
+export function unpackPegeDensity(batch: PackedDensityBatch): GalaxyDensityCell[] {
+  const centroids = new Float32Array(batch.centroidFixedXyz);
+  const counts = new Uint32Array(batch.voxelSystemCounts);
+  if (centroids.length !== counts.length * 3) {
+    throw asError("density centroid and count buffers disagree");
+  }
+  return Array.from(counts, (genuineSystemCount, index) => ({
+    coords: {
+      x: centroids[index * 3]! / 32,
+      y: centroids[index * 3 + 1]! / 32,
+      z: centroids[index * 3 + 2]! / 32,
+    },
+    genuineSystemCount,
+  }));
+}
+
 export class PegeGalaxySource implements GalaxySource {
   readonly #worker: Worker;
   readonly #queryWorker: Worker;
@@ -327,7 +421,7 @@ export class PegeGalaxySource implements GalaxySource {
   readonly #pending = new Map<number, Pending>();
   readonly #spatialTileCache = new Map<
     string,
-    GalaxySpatialTile & { lastUsed: number }
+    GalaxySpatialTile & { filterKey: string; lastUsed: number }
   >();
   #spatialCacheScope: string | undefined;
   #localRegionCache:
@@ -385,12 +479,14 @@ export class PegeGalaxySource implements GalaxySource {
       // Cancelled and superseded requests can still have queued worker
       // progress. Never let those orphan messages complete the active UI.
       if (response.requestId === 0 || !pending) return;
+      if (pending.kind === "generate" && pending.suppressProgress) return;
       this.#onProgress?.(
         response.phase === "detail"
           ? mapDetailProgress(
               response.completed,
               response.total,
-              pending.kind === "generate" || pending.kind === "tiles"
+              pending.kind === "generate" || pending.kind === "tiles" ||
+                  pending.kind === "value"
                 ? pending.detailProgressRange
                 : undefined,
             )
@@ -405,9 +501,11 @@ export class PegeGalaxySource implements GalaxySource {
     if (!pending) return;
     if (response.type === "batch") {
       if (pending.kind === "generate") {
-        for (const system of unpackPegeBatch(response.batch)) {
+        const batch = unpackPegeBatch(response.batch);
+        for (const system of batch) {
           pending.systems.push(system);
         }
+        pending.onBatch?.(batch);
       }
       return;
     }
@@ -426,6 +524,34 @@ export class PegeGalaxySource implements GalaxySource {
       }
       systems.push(...unpackPegeBatch(response.batch));
       pending.systemsByKey.set(response.tileKeyString, systems);
+      pending.onPartialTiles?.(
+        pending.plan.map((tile) => ({
+          key: tile.keyString,
+          tileKey: tile.key,
+          targetSystems: tile.targetSystems,
+          populationWeight: tile.populationWeight,
+          systems: pending.systemsByKey.get(tile.keyString) ?? [],
+          densityCells: pending.densityByKey.get(tile.keyString) ?? [],
+        })),
+      );
+      return;
+    }
+    if (response.type === "tile-density") {
+      if (pending.kind !== "tiles") return;
+      pending.densityByKey.set(
+        response.tileKeyString,
+        unpackPegeDensity(response.density),
+      );
+      pending.onPartialTiles?.(
+        pending.plan.map((tile) => ({
+          key: tile.keyString,
+          tileKey: tile.key,
+          targetSystems: tile.targetSystems,
+          populationWeight: tile.populationWeight,
+          systems: pending.systemsByKey.get(tile.keyString) ?? [],
+          densityCells: pending.densityByKey.get(tile.keyString) ?? [],
+        })),
+      );
       return;
     }
     if (response.type === "complete") {
@@ -445,6 +571,7 @@ export class PegeGalaxySource implements GalaxySource {
             targetSystems: tile.targetSystems,
             populationWeight: tile.populationWeight,
             systems: pending.systemsByKey.get(tile.keyString) ?? [],
+            densityCells: pending.densityByKey.get(tile.keyString) ?? [],
           })),
         );
       }
@@ -489,6 +616,7 @@ export class PegeGalaxySource implements GalaxySource {
     message: WorkerRequestWithoutId,
     signal?: AbortSignal,
     worker = this.#worker,
+    detailProgressRange?: GalaxyDetailProgressRange,
   ): Promise<T> {
     if (signal?.aborted) return Promise.reject(abortError());
     const requestId = this.#nextRequestId++;
@@ -507,6 +635,7 @@ export class PegeGalaxySource implements GalaxySource {
         resolve: (value) => resolve(value as T),
         reject,
         detachAbort: () => signal?.removeEventListener("abort", abort),
+        detailProgressRange,
       });
       worker.postMessage({ ...message, requestId });
     });
@@ -514,12 +643,20 @@ export class PegeGalaxySource implements GalaxySource {
 
   #generateTiles(
     plan: TilePlan,
+    stellarLod: StellarLodPolicy,
+    attributes: "spatial-primary-render" | "spatial-overview-estimate",
+    sourceMassCodes?: readonly number[],
     signal?: AbortSignal,
     detailProgressRange?: GalaxyDetailProgressRange,
+    includeNames = false,
+    onPartialTiles?: (tiles: readonly GalaxySpatialTile[]) => void,
   ): Promise<GalaxySpatialTile[]> {
     if (signal?.aborted) return Promise.reject(abortError());
     if (plan.length === 0) return Promise.resolve([]);
     const requestId = this.#nextRequestId++;
+    const filteredBoxelBudgets = stellarLod.mode === "class-weighted"
+      ? filteredSpatialBoxelBudgets(plan)
+      : undefined;
     return new Promise<GalaxySpatialTile[]>((resolve, reject) => {
       const abort = () => {
         this.#worker.postMessage({ type: "cancel", requestId });
@@ -534,34 +671,47 @@ export class PegeGalaxySource implements GalaxySource {
         kind: "tiles",
         plan,
         systemsByKey: new Map(),
+        densityByKey: new Map(),
         resolve,
         reject,
         detachAbort: () => signal?.removeEventListener("abort", abort),
         detailProgressRange,
+        onPartialTiles,
       });
       this.#worker.postMessage({
         type: "tiles",
         requestId,
-        tiles: plan.map((tile) => ({
+        attributes,
+        tiles: plan.map((tile, index) => ({
           key: tile.key,
           targetSystems: tile.targetSystems,
+          sampleTargetSystems: Math.min(
+            tile.targetSystems,
+            Math.max(1, Math.ceil(tile.targetSystems * DENSITY_TILE_SAMPLE_FRACTION)),
+          ),
+          voxelResolution: DENSITY_TILE_VOXEL_RESOLUTION,
+          ...(filteredBoxelBudgets === undefined
+            ? {}
+            : { maximumBoxelsVisited: filteredBoxelBudgets[index]! }),
         })),
         selectionSeed: PEGE_OVERVIEW_CONFIG.selectionSeed,
-        stellarLod: PEGE_OVERVIEW_CONFIG.stellarLod,
+        stellarLod,
+        ...(sourceMassCodes === undefined ? {} : { massCodes: sourceMassCodes }),
+        includeNames,
       } satisfies PegeWorkerRequest);
     });
   }
 
-  #spatialTileCacheKey(tile: TilePlan[number]): string {
+  #spatialTileCacheKey(tile: TilePlan[number], filterKey: string): string {
     return [
       "pege-tile",
       this.#runtimeUrl,
       `spatial-${GALAXY_SPATIAL_SELECTION_VERSION}`,
+      `density-${GALAXY_DENSITY_TILE_VERSION}`,
       tile.keyString,
       tile.targetSystems,
       PEGE_OVERVIEW_CONFIG.selectionSeed,
-      PEGE_OVERVIEW_CONFIG.stellarLod.mode,
-      PEGE_OVERVIEW_CONFIG.stellarLod.strength,
+      filterKey,
     ].join(":");
   }
 
@@ -589,11 +739,10 @@ export class PegeGalaxySource implements GalaxySource {
           minimumFixedXyz: readonly [number, number, number];
           maximumExclusiveFixedXyz: readonly [number, number, number];
           targetSystems: number;
+          massCodes?: readonly number[];
           selectionSeed: string;
-          stellarLod: {
-            mode: "presentation-balanced";
-            strength: number;
-          };
+          maximumBoxelsVisited?: number;
+          stellarLod: StellarLodPolicy;
         }
       | { type: "warm" }
       | {
@@ -604,9 +753,12 @@ export class PegeGalaxySource implements GalaxySource {
       threshold: number;
       maximumBoxels?: number;
       yieldEveryBoxels?: number;
+      includeNames?: boolean;
     },
     signal?: AbortSignal,
     detailProgressRange?: GalaxyDetailProgressRange,
+    onBatch?: (systems: readonly System[]) => void,
+    suppressProgress?: boolean,
   ): Promise<GalaxyOverview> {
     if (signal?.aborted) return Promise.reject(abortError());
     const requestId = this.#nextRequestId++;
@@ -627,6 +779,8 @@ export class PegeGalaxySource implements GalaxySource {
         reject,
         detachAbort: () => signal?.removeEventListener("abort", abort),
         detailProgressRange,
+        onBatch,
+        suppressProgress,
       });
       this.#worker.postMessage({
         requestId,
@@ -636,10 +790,10 @@ export class PegeGalaxySource implements GalaxySource {
   }
 
   async loadOverview(
-    _request: GalaxyOverviewRequest,
+    request: GalaxyOverviewRequest,
     signal?: AbortSignal,
   ): Promise<GalaxyOverview> {
-    const cached = await readOverviewCache(this.#runtimeUrl);
+    const cached = await readOverviewCache(this.#runtimeUrl, request.stellarTypes);
     if (cached) {
       await this.#generate({ type: "warm" }, signal);
       return cached;
@@ -650,14 +804,17 @@ export class PegeGalaxySource implements GalaxySource {
         minimumFixedXyz: PEGE_OVERVIEW_CONFIG.minimumFixedXyz,
         maximumExclusiveFixedXyz: PEGE_OVERVIEW_CONFIG.maximumExclusiveFixedXyz,
         targetSystems: PEGE_OVERVIEW_CONFIG.targetSystems,
+        ...(request.stellarTypes?.length
+          ? { maximumBoxelsVisited: PEGE_FILTERED_OVERVIEW_MAXIMUM_BOXELS }
+          : {}),
         selectionSeed: PEGE_OVERVIEW_CONFIG.selectionSeed,
-        stellarLod: PEGE_OVERVIEW_CONFIG.stellarLod,
+        stellarLod: pegeStellarLodForTypes(request.stellarTypes),
       },
       signal,
     );
     if (!signal?.aborted) {
       this.#onProgress?.({ phase: "prepare", completed: 0, total: 1 });
-      await writeOverviewCache(this.#runtimeUrl, overview);
+      await writeOverviewCache(this.#runtimeUrl, overview, request.stellarTypes);
       this.#onProgress?.({ phase: "prepare", completed: 1, total: 1 });
     }
     return overview;
@@ -688,7 +845,11 @@ export class PegeGalaxySource implements GalaxySource {
       Math.ceil(maximum.y * 32),
       Math.ceil(maximum.z * 32),
     ] as const;
-    const massCodes = massCodesForView(request.cameraDistanceLy, request.lod);
+    const massCodes = massCodesForView(
+      request.cameraDistanceLy,
+      request.lod,
+      request.massCodes,
+    );
     const threshold = thresholdForView(request.cameraDistanceLy, request.lod);
     const maximumBoxels = maximumBoxelsForView(request.cameraDistanceLy);
     const cacheKey = [
@@ -697,10 +858,14 @@ export class PegeGalaxySource implements GalaxySource {
       massCodes.join(","),
       threshold,
       maximumBoxels ?? "all",
+      request.includeNames ? "names" : "points",
     ].join(":");
     const cachedSystems = this.#localRegionCache?.key === cacheKey
       ? this.#localRegionCache.systems
       : undefined;
+    const matchesRequestedClass = (system: System) =>
+      !request.stellarTypes?.length ||
+      (system.stellarType !== undefined && request.stellarTypes.includes(system.stellarType));
     const generated = cachedSystems
       ? Promise.resolve({ systems: cachedSystems })
       : this.#generate(
@@ -713,17 +878,28 @@ export class PegeGalaxySource implements GalaxySource {
             // At broader zooms, sample a stable set of real boxels first so a
             // camera move cannot enqueue hundreds of thousands of full boxels.
             maximumBoxels,
+            includeNames: request.includeNames,
           },
           signal,
           request.detailProgressRange,
+          request.onPartialSystems
+            ? (systems) => {
+                const matching = systems.filter(matchesRequestedClass);
+                if (matching.length) request.onPartialSystems!(matching);
+              }
+            : undefined,
+          request.suppressProgress,
         ).then((overview) => {
           this.#localRegionCache = { key: cacheKey, systems: overview.systems };
           return overview;
         });
     const radiusSquared = radius * radius;
-    if (request.bounds) return generated.then(({ systems }) => systems);
+    if (request.bounds) {
+      return generated.then(({ systems }) => systems.filter(matchesRequestedClass));
+    }
     return generated.then(({ systems }) =>
       systems.filter((system) => {
+        if (!matchesRequestedClass(system)) return false;
         const dx = system.coords.x - request.center.x;
         const dy = system.coords.y - request.center.y;
         const dz = system.coords.z - request.center.z;
@@ -757,35 +933,94 @@ export class PegeGalaxySource implements GalaxySource {
       this.#spatialTileCache.clear();
       this.#spatialCacheScope = request.cacheScope;
     }
-    const plan = await this.#post<TilePlan>(
-      {
-        type: "plan-tiles",
-        keys: request.keys,
-        totalTargetSystems: request.totalTargetSystems,
-        ...(request.keyWeights
-          ? {
-              keyWeights: request.keys.map((key) =>
-                request.keyWeights!.find(
-                  (entry) =>
-                    galaxyViewTileKeyString(entry.key) ===
-                    galaxyViewTileKeyString(key),
-                )?.weight ?? 1,
-              ),
-            }
-          : {}),
-      },
-      signal,
+    this.#onProgress?.(
+      mapDetailProgress(0, 1, request.detailProgressRange),
     );
+    const massCodes = massCodesForView(0, 0, request.massCodes);
+    const hasMassCodeFilter = Boolean(request.massCodes?.length);
+    // Stellar class and boxel mass code are independent filters. PEGE must
+    // inspect every source mass code unless the caller explicitly selected a
+    // mass-code subset; inferring one from a stellar type drops valid systems.
+    const sourceMassCodes = hasMassCodeFilter ? massCodes : undefined;
+    if (sourceMassCodes?.length === 0) {
+      const empty = uniformTilePlan(request.keys, request.totalTargetSystems).map(
+        (tile) => ({
+          key: tile.keyString,
+          tileKey: tile.key,
+          targetSystems: tile.targetSystems,
+          populationWeight: tile.populationWeight,
+          systems: [],
+          densityCells: [],
+        }),
+      );
+      request.onPartialTiles?.(empty);
+      this.#onProgress?.(mapDetailProgress(1, 1, request.detailProgressRange));
+      return empty;
+    }
+    const indexedSpecialOnly = pegeFilterUsesOnlyIndexedSpecialClasses(
+      request.stellarTypes,
+    );
+    // Filtered local detail must use the same canonical classification as
+    // selected-System profiles. Presentation-only overview estimates would
+    // create points that disappear when the user approaches them.
+    const attributes = "spatial-primary-render" as const;
+    const filterKey = [
+      pegeStellarFilterKey(request.stellarTypes),
+      `attributes:${attributes}`,
+      `mass:${hasMassCodeFilter ? massCodes.join(",") : "all"}`,
+      request.includeNames ? "names" : "points",
+    ].join("|");
+    const stellarLod = pegeStellarLodForTypes(request.stellarTypes);
+    const planProgressRange = request.detailProgressRange
+      ? {
+          start: request.detailProgressRange.start,
+          end: request.detailProgressRange.start +
+            (request.detailProgressRange.end - request.detailProgressRange.start) * 0.1,
+        }
+      : undefined;
+    const tileProgressRange = request.detailProgressRange
+      ? {
+          start: planProgressRange!.end,
+          end: request.detailProgressRange.end,
+        }
+      : undefined;
+    const plan = indexedSpecialOnly
+      ? uniformTilePlan(request.keys, request.totalTargetSystems)
+      : await this.#post<TilePlan>(
+          {
+            type: "plan-tiles",
+            keys: request.keys,
+            totalTargetSystems: request.totalTargetSystems,
+            ...(request.keyWeights
+              ? {
+                  keyWeights: request.keys.map((key) =>
+                    request.keyWeights!.find(
+                      (entry) =>
+                        galaxyViewTileKeyString(entry.key) ===
+                        galaxyViewTileKeyString(key),
+                    )?.weight ?? 1,
+                  ),
+                }
+              : {}),
+          },
+          signal,
+          this.#worker,
+          planProgressRange,
+        );
+    if (indexedSpecialOnly && planProgressRange) {
+      this.#onProgress?.(mapDetailProgress(1, 1, planProgressRange));
+    }
     const resultByKey = new Map<string, GalaxySpatialTile>();
     const missing: TilePlan[number][] = [];
     const usedCacheKeys = new Set<string>();
     for (const tile of plan) {
-      const cacheKey = this.#spatialTileCacheKey(tile);
+      const cacheKey = this.#spatialTileCacheKey(tile, filterKey);
       let cachedKey = cacheKey;
       let cached = this.#spatialTileCache.get(cacheKey);
       for (const [candidateKey, candidate] of this.#spatialTileCache) {
         if (
           candidate.key === tile.keyString &&
+          candidate.filterKey === filterKey &&
           candidate.targetSystems >= tile.targetSystems &&
           (!cached || candidate.targetSystems > cached.targetSystems)
         ) {
@@ -807,20 +1042,62 @@ export class PegeGalaxySource implements GalaxySource {
           targetSystems: 0,
           populationWeight: tile.populationWeight,
           systems: [],
+          densityCells: [],
         });
       }
     }
-    this.#onProgress?.(
-      mapDetailProgress(0, 1, request.detailProgressRange),
+    const presentTiles = (tiles: GalaxySpatialTile[]) => tiles.map((tile) => ({
+      key: tile.key,
+      tileKey: tile.tileKey,
+      targetSystems: tile.targetSystems,
+      populationWeight: tile.populationWeight,
+      systems: hasMassCodeFilter
+        ? tile.systems.filter(
+            (system) =>
+              system.massCode !== undefined && massCodes.includes(system.massCode),
+          )
+        : tile.systems,
+      // Density voxels do not yet retain a mass-code histogram. Omitting them
+      // is more accurate than showing all-population glow for a selected slice.
+      densityCells: hasMassCodeFilter ? [] : tile.densityCells,
+    }));
+    request.onPartialTiles?.(
+      presentTiles(
+        plan
+          .map((tile) => resultByKey.get(tile.keyString))
+          .filter((tile): tile is GalaxySpatialTile => tile !== undefined),
+      ),
     );
     for (const tile of await this.#generateTiles(
       missing,
+      stellarLod,
+      attributes,
+      sourceMassCodes,
       signal,
-      request.detailProgressRange,
+      tileProgressRange,
+      request.includeNames,
+      request.onPartialTiles
+        ? (tiles) => {
+            for (const tile of tiles) resultByKey.set(tile.key, tile);
+            request.onPartialTiles!(
+              presentTiles(
+                plan
+                  .map((entry) => resultByKey.get(entry.keyString))
+                  .filter(
+                    (tile): tile is GalaxySpatialTile => tile !== undefined,
+                  ),
+              ),
+            );
+          }
+        : undefined,
     )) {
       const planned = plan.find((entry) => entry.keyString === tile.key)!;
-      const cacheKey = this.#spatialTileCacheKey(planned);
-      const cached = { ...tile, lastUsed: ++this.#tileUseRevision };
+      const cacheKey = this.#spatialTileCacheKey(planned, filterKey);
+      const cached = {
+        ...tile,
+        filterKey,
+        lastUsed: ++this.#tileUseRevision,
+      };
       this.#spatialTileCache.set(cacheKey, cached);
       resultByKey.set(tile.key, cached);
     }
@@ -831,13 +1108,7 @@ export class PegeGalaxySource implements GalaxySource {
     return plan
       .map((tile) => resultByKey.get(tile.keyString))
       .filter((tile): tile is GalaxySpatialTile => tile !== undefined)
-      .map((tile) => ({
-        key: tile.key,
-        tileKey: tile.tileKey,
-        targetSystems: tile.targetSystems,
-        populationWeight: tile.populationWeight,
-        systems: tile.systems,
-      }));
+      .map((tile) => presentTiles([tile])[0]!);
   }
 
   resolve(query: string): Promise<System | undefined> {

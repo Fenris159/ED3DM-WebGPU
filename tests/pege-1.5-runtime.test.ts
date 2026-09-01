@@ -17,7 +17,11 @@ import {
 } from "pege";
 import { describe, expect, it } from "vitest";
 import { PEGE_OVERVIEW_CONFIG } from "../src/pege-overview";
-import { resolvePegeQuery, suggestPegeQueries } from "../src/pege-worker";
+import {
+  packFilteredGalaxyBoxel,
+  resolvePegeQuery,
+  suggestPegeQueries,
+} from "../src/pege-worker";
 
 type ViewResult = {
   ids: string[];
@@ -38,6 +42,61 @@ const pege = new Pege(decodeGalaxyRuntimeData(runtimeData), {
     maxBytes: 128 * 1024 * 1024,
     trimToBytes: 96 * 1024 * 1024,
   },
+});
+
+it("clips a local boxel before resolving aligned stellar attributes", () => {
+  const targetId64 = 98210702501138n;
+  const resolved = pege.resolveAddress(targetId64);
+  expect(resolved.status).not.toBe("unknown");
+  if (resolved.status === "unknown") return;
+
+  const boxel = pege.generateBoxel(targetId64);
+  const [x, y, z] = resolved.status === "authored"
+    ? resolved.system.starPosXyz
+    : resolved.position.starPosXyz;
+  const minimumFixedXyz = [
+    Math.floor((x - 5) * 32),
+    Math.floor((y - 5) * 32),
+    Math.floor((z - 5) * 32),
+  ] as const;
+  const maximumExclusiveFixedXyz = [
+    Math.ceil((x + 5) * 32),
+    Math.ceil((y + 5) * 32),
+    Math.ceil((z + 5) * 32),
+  ] as const;
+  const packed = packFilteredGalaxyBoxel(
+    pege,
+    boxel,
+    1,
+    minimumFixedXyz,
+    maximumExclusiveFixedXyz,
+  );
+  const count = packed.records.byteLength / GALAXY_SYSTEM_STRIDE_BYTES;
+
+  expect(count).toBeGreaterThan(0);
+  expect(count).toBeLessThan(boxel.systems.length);
+  expect(
+    packed.stellarRecords!.byteLength / STELLAR_SYSTEM_ATTRIBUTE_STRIDE_BYTES,
+  ).toBe(count);
+  expect(
+    packed.stellarRadii!.byteLength / Float32Array.BYTES_PER_ELEMENT,
+  ).toBe(count);
+
+  const view = new DataView(packed.records);
+  const ids: bigint[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const offset = index * GALAXY_SYSTEM_STRIDE_BYTES;
+    ids.push(
+      (BigInt(view.getUint32(offset + 4, true)) << 32n) |
+        BigInt(view.getUint32(offset, true)),
+    );
+    for (let axis = 0; axis < 3; axis += 1) {
+      const value = view.getInt32(offset + 8 + axis * 4, true);
+      expect(value).toBeGreaterThanOrEqual(minimumFixedXyz[axis]!);
+      expect(value).toBeLessThan(maximumExclusiveFixedXyz[axis]!);
+    }
+  }
+  expect(ids).toContain(targetId64);
 });
 
 async function collectView(
@@ -137,14 +196,61 @@ describe("published PEGE representative galaxy view", () => {
       system?.stellarComponents?.[1]?.orbitalElements?.semiMajorAxisMeters ?? 0,
     ).toBeGreaterThan(0);
   });
-  it("forwards rogue planets at their generated positions", () => {
+  it("preserves the replayed Zunoae primary and secondary classifications", () => {
+    const system = resolvePegeQuery(pege, "Zunoae BY-Z c1-357");
+    expect(system).toEqual(expect.objectContaining({
+      name: "Zunoae BY-Z c1-357",
+      id64: "98210702501138",
+      stellarType: "K",
+      stellarSubclass: 1,
+      stellarLuminosityClass: "Vab",
+      stellarProfileComposition: "partial",
+    }));
+    expect(system?.stellarComponents).toHaveLength(2);
+    expect(system?.stellarComponents?.map((component) => ({
+      starType: component.starType,
+      subclass: component.subclass,
+      luminosityClass: component.luminosityClass,
+    }))).toEqual([
+      { starType: "K", subclass: 1, luminosityClass: "Vab" },
+      { starType: "M", subclass: 9, luminosityClass: "VI" },
+    ]);
+    expect(system?.stellarComponents?.[0]).toEqual(expect.objectContaining({
+      provenance: "procedural-engine",
+      validation: "estimated",
+      displayColor: expect.objectContaining({ source: "blackbody-estimate" }),
+      attributeValidation: expect.objectContaining({
+        starType: "estimated",
+        radiusMeters: "estimated",
+        surfaceTemperatureKelvin: "estimated",
+      }),
+    }));
+    expect(system?.stellarComponents?.[0]?.surfaceTemperatureKelvin).toBeGreaterThan(4_900);
+    expect(system?.stellarComponents?.[0]?.surfaceTemperatureKelvin).toBeLessThanOrEqual(5_050);
+    expect(system?.stellarComponents?.[0]?.radiusMeters ?? 0).toBeGreaterThan(0);
+    expect(system?.stellarComponents?.[0]?.luminositySolar ?? 0).toBeGreaterThan(0);
+  });
+  it("does not infer rogue planets from low procedural mass", () => {
     const system = resolvePegeQuery(pege, "4103303088608");
     expect(system).toEqual(expect.objectContaining({
       id64: "4103303088608",
-      stellarType: "RoguePlanet",
+      stellarType: "Y",
       coords: { x: -11773.96875, y: -124.25, z: -464.96875 },
     }));
-    expect(system?.stellarComponents).toHaveLength(1);
+    expect(system?.stellarValidation?.mass).toBe("estimated");
+  });
+  it("does not depend on ID64-keyed observed primary-class corrections", () => {
+    const fixtures = ["75734768831304", "5364950780760", "19265790"];
+    for (const id64 of fixtures) {
+      const system = resolvePegeQuery(pege, id64);
+      expect(system).toEqual(expect.objectContaining({
+        id64,
+        exactPosition: true,
+      }));
+      expect(system?.stellarProfileSource).not.toBe("observed-primary-classification");
+      expect(system?.stellarComponents?.[0]?.provenance).not.toBe("observed-fixture");
+      expect(system?.stellarType).not.toBe("RoguePlanet");
+    }
   });
   it("is aligned, deterministic, nested, exact, and presentation-balanced", async () => {
     const balancedPolicy = {

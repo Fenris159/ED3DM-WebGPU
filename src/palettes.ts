@@ -119,11 +119,11 @@ export function colorFor(
 }
 
 export function orbScale(radiusMeters: number | undefined): number {
-  const DEFAULT = 90;
+  const DEFAULT = 110;
   const SOLAR_RADIUS_METERS = 695_700_000;
   if (!radiusMeters || !Number.isFinite(radiusMeters) || radiusMeters <= 0) {
     return DEFAULT;
   }
   const relative = radiusMeters / SOLAR_RADIUS_METERS;
-  return Math.min(260, Math.max(48, DEFAULT * Math.pow(relative, 0.25)));
+  return Math.min(300, Math.max(72, DEFAULT * Math.pow(relative, 0.25)));
 }

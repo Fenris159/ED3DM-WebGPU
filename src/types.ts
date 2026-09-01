@@ -4,6 +4,12 @@ export type GenerationKind = "authored" | "ordinary" | "constrained";
 
 export type StellarFieldValidation = "exact" | "observed" | "estimated";
 
+export type StellarDataProvenance =
+  | "procedural-engine"
+  | "authored-overlay"
+  | "observed-fixture"
+  | "player-journal";
+
 export type StellarValidation = {
   starType?: StellarFieldValidation;
   mass?: StellarFieldValidation;
@@ -34,6 +40,20 @@ export type StellarRing = {
   outerRadiusMeters: number;
 };
 
+export type StellarDisplayColor = {
+  srgb: readonly [number, number, number];
+  source: "engine-palette" | "blackbody-estimate";
+};
+
+export type StellarAttributeValidation = {
+  starType?: StellarFieldValidation;
+  stellarMassSolar?: StellarFieldValidation;
+  radiusMeters?: StellarFieldValidation;
+  surfaceTemperatureKelvin?: StellarFieldValidation;
+  luminositySolar?: StellarFieldValidation;
+  displayColor?: StellarFieldValidation;
+};
+
 export type StellarComponentDetails = {
   bodyId: number;
   name?: string;
@@ -52,8 +72,11 @@ export type StellarComponentDetails = {
   distanceFromArrivalLightSeconds?: number;
   orbitalElements?: StellarOrbitalElements;
   rings?: StellarRing[];
+  displayColor?: StellarDisplayColor;
   stellarColor?: string;
+  provenance?: StellarDataProvenance;
   validation: StellarFieldValidation;
+  attributeValidation?: StellarAttributeValidation;
   stellarValidation?: StellarValidation;
 };
 
@@ -72,7 +95,9 @@ export type System = {
   stellarMassSolar?: number;
   stellarTemperatureKelvin?: number;
   stellarLuminositySolar?: number;
-  stellarProfileSource?: "compiled-catalogue" | "procedural-primary-model";
+  stellarProfileSource?:
+    | "compiled-catalogue"
+    | "procedural-primary-model";
   stellarProfileValidation?: StellarFieldValidation;
   stellarValidation?: StellarValidation;
   stellarProfileComposition?: "complete" | "partial";
@@ -124,12 +149,24 @@ export type GalaxyRegionRequest = {
   bounds?: GalaxyViewBounds;
   cameraDistanceLy: number;
   lod: LodSetting;
+  /** Optional immutable System mass codes to retain. Omitted means a-h. */
+  massCodes?: readonly number[];
+  /** Primary stellar classes to retain while populating this view. */
+  stellarTypes?: readonly string[];
   /** Optional share of the current local-detail loading operation, from 0 to 1. */
   detailProgressRange?: GalaxyDetailProgressRange;
+  /** Genuine decoded Systems published incrementally before the region completes. */
+  onPartialSystems?: (systems: readonly System[]) => void;
+  /** Internal supporting requests can opt out of the shared residency progress UI. */
+  suppressProgress?: boolean;
+  /** Resolve display names for labels. Omit while the Names layer is hidden. */
+  includeNames?: boolean;
 };
 
 export type GalaxyOverviewRequest = {
   lod: LodSetting;
+  /** Primary stellar classes to sample up to the normal overview capacity. */
+  stellarTypes?: readonly string[];
 };
 
 export type GalaxyOverview = {
@@ -161,6 +198,10 @@ export type PegeSpatialTileKey = {
 export type GalaxySpatialTileRequest = {
   keys: readonly PegeSpatialTileKey[];
   totalTargetSystems: number;
+  /** Optional immutable System mass codes to retain. Omitted means a-h. */
+  massCodes?: readonly number[];
+  /** Primary stellar classes to retain while populating these tiles. */
+  stellarTypes?: readonly string[];
   /** Stable local camera zone. A new scope permits the source to evict the old zone cache. */
   cacheScope?: string;
   keyWeights?: readonly {
@@ -169,6 +210,10 @@ export type GalaxySpatialTileRequest = {
   }[];
   /** Optional share of the current local-detail loading operation, from 0 to 1. */
   detailProgressRange?: GalaxyDetailProgressRange;
+  /** Resolve display names for labels. Omit while the Names layer is hidden. */
+  includeNames?: boolean;
+  /** Publish factual tile batches while the requested residency is still streaming. */
+  onPartialTiles?: (tiles: readonly GalaxySpatialTile[]) => void;
 };
 
 export type GalaxySpatialTile = {
@@ -177,6 +222,13 @@ export type GalaxySpatialTile = {
   targetSystems: number;
   populationWeight: number;
   systems: System[];
+  /** Non-pickable aggregate shell density; these cells are not Systems. */
+  densityCells?: GalaxyDensityCell[];
+};
+
+export type GalaxyDensityCell = {
+  coords: Coords;
+  genuineSystemCount: number;
 };
 
 export type GalaxyLoadPhase =
@@ -232,6 +284,8 @@ export type SystemFilter = {
   generations?: GenerationKind[];
   stellarTypes?: string[];
   excludedStellarTypes?: string[];
+  /** Immutable System mass codes to retain. Omitted means a-h. */
+  massCodes?: number[];
 };
 
 export type VisualTheme = "paper" | "charcoal" | "realistic";
@@ -255,6 +309,8 @@ export type CreateOptions = {
   onSystemClick?: (system: System | undefined) => void;
   onPlaneHeight?: (y: number) => void;
   onZoom?: (percent: number) => void;
+  onGridSize?: (code: MassCode, finest: MassCode) => void;
+  /** @deprecated Use onGridSize; this callback never filters System mass codes. */
   onMassCode?: (code: MassCode, finest: MassCode) => void;
   onVisibleSystemsChange?: (count: number, detailCount: number) => void;
   /** Called after newly generated local detail has reached a rendered frame. */

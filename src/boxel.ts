@@ -5,9 +5,8 @@
  * positions, distances, HUD, and Three.js world use this frame.
  *
  * Stellar Forge boxel lattice: a nested cubic grid for generation, procedural
- * names, Catalog tiles, and the drawn grid. Its origin is BOXEL_ORIGIN in Elite
- * space, so Sol sits *inside* a cube — not on a corner. Conversion is a
- * translation, not a scale:
+ * names, and Catalog tiles. Its origin is BOXEL_ORIGIN in Elite space, so Sol
+ * sits inside a generated cube. Conversion is a translation, not a scale:
  *
  *   boxel = elite − BOXEL_ORIGIN
  *   elite = boxel + BOXEL_ORIGIN
@@ -15,14 +14,15 @@
  * Sol’s mass-code **d** (80 ly) cube has its lower-front-left corner at
  * (−65, −25, −25); Sol is offset (+65, +25, +25) from that corner.
  *
- * The drawn grid is a window onto this world-fixed lattice (Y = height plane).
- * Cell size is the selected mass code — never thinned by camera angle.
- * Zoom only changes which mass code is the finest allowed.
+ * The visible map grid is presentation owned by ED3DM and is anchored to Elite
+ * space (Sol at 0:0:0), matching the in-game galaxy map. It borrows the a-h
+ * spacing without changing PEGE's generation lattice or any System identity.
  */
 export const MASS_CODES = ["a", "b", "c", "d", "e", "f", "g", "h"] as const;
 export type MassCode = (typeof MASS_CODES)[number];
 
 export const BOXEL_ORIGIN = { x: -49985, y: -40985, z: -24105 };
+export const MAP_GRID_ORIGIN = { x: 0, y: 0, z: 0 };
 export const GALAXY_DIAMETER = 100000;
 /** Max line count per axis in the current view (window cap, not a cell-size change). */
 export const MAX_BOXEL_LINES = 256;
@@ -149,7 +149,7 @@ export function effectiveBoxelMassCode(
 }
 
 /**
- * Lattice-aligned window covering the visible AABB on the galactic plane.
+ * Sol-aligned presentation-grid window covering the visible AABB.
  * Step is always one mass-code cell. A huge view is clipped to MAX_BOXEL_LINES
  * around `look` so orbiting cannot change cell size.
  */
@@ -185,10 +185,10 @@ export function boxelWindowForView(
     vz0 = cz - maxSpan / 2;
     vz1 = cz + maxSpan / 2;
   }
-  const minX = snapDown(vx0, BOXEL_ORIGIN.x, S);
-  const maxX = snapUp(vx1, BOXEL_ORIGIN.x, S);
-  const minZ = snapDown(vz0, BOXEL_ORIGIN.z, S);
-  const maxZ = snapUp(vz1, BOXEL_ORIGIN.z, S);
+  const minX = snapDown(vx0, MAP_GRID_ORIGIN.x, S);
+  const maxX = snapUp(vx1, MAP_GRID_ORIGIN.x, S);
+  const minZ = snapDown(vz0, MAP_GRID_ORIGIN.z, S);
+  const maxZ = snapUp(vz1, MAP_GRID_ORIGIN.z, S);
 
   if (
     prev &&
